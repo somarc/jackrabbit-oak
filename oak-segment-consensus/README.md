@@ -152,7 +152,7 @@ the environment variable wins. Settings listed without an environment variable a
 
 | Option | Default | |
 |---|---|---|
-| `--port` | `8090` | HTTP port. `port + 1` is also used by the Oak standby server. |
+| `--port` | `8090` | HTTP port. |
 | `--store` | `/var/oak-chain/segmentstore-composite-mount-oak-chain` | Segment store directory. Logs go to `<parent>/logs` (`-Doak.log.dir` overrides). |
 | `--help` | | Print usage. |
 

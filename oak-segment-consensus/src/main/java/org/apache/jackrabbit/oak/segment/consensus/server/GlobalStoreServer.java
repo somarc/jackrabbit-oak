@@ -20,8 +20,6 @@ import java.io.File;
 import java.io.Closeable;
 import java.io.IOException;
 
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.gc.RevisionGcScheduler;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
@@ -97,15 +95,12 @@ public class GlobalStoreServer {
     private org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore;
     private SegmentHttpServer httpServer;
     private RevisionGcScheduler revisionGc;
-    private ValidatorBootstrap bootstrap;
     private org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet wallet;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService aeronClusterService;
     private GlobalStoreServerComponentFactory componentFactory;
     private org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher aeronClusterLauncher;
     private final WalletStartupCoordinator walletStartupCoordinator = new WalletStartupCoordinator();
     private final StartupPreflightCoordinator startupPreflightCoordinator = new StartupPreflightCoordinator();
-    private final StandbyModeStartupCoordinator standbyModeStartupCoordinator = new StandbyModeStartupCoordinator();
-    private final BootstrapModeCoordinator bootstrapModeCoordinator = new BootstrapModeCoordinator();
     private final GenesisStartupCoordinator genesisStartupCoordinator = new GenesisStartupCoordinator();
     private final ServerInfrastructureInitializer serverInfrastructureInitializer = new ServerInfrastructureInitializer();
     private final ServerActivationCoordinator serverActivationCoordinator = new ServerActivationCoordinator();
@@ -151,17 +146,7 @@ public class GlobalStoreServer {
         this.wallet = walletStartup.wallet();
         final String finalClusterWallet = walletStartup.clusterWalletAddress();
         
-        StartupPreflightCoordinator.PreflightResult preflight =
-            startupPreflightCoordinator.prepare(storeDirectory, port, currentAeronConfig());
-        File storeDir = preflight.storeDir();
-        boolean directoryIsEmpty = preflight.directoryEmpty();
-        boolean needsBootstrapBeforeBuild = preflight.needsBootstrapBeforeBuild();
-        String verifiedBootstrapPrimaryHost = preflight.verifiedBootstrapPrimaryHost();
-        int verifiedBootstrapPrimaryPort = preflight.verifiedBootstrapPrimaryPort();
-        
-        // Bootstrap mode (needs to be accessible throughout method)
-        BootstrapMode detectedMode = BootstrapMode.PRIMARY;  // Default
-        int standbyPort = port + 1;  // Standby port = HTTP port + 1 (used for Oak FileStore bootstrap)
+        File storeDir = startupPreflightCoordinator.prepare(storeDirectory);
         
         // Initialize Oak FileStore
         log.info("Initializing Oak FileStore...");
@@ -207,91 +192,15 @@ public class GlobalStoreServer {
             this.revisionGc = infrastructure.revisionGc();
             String selfUrl = this.httpServer.getContext().selfUrl;
             
-            // If bootstrap is needed, mark for immediate sync (before any other initialization)
-            if (needsBootstrapBeforeBuild) {
-                log.warn("   ⚠️  Initial HEAD created (will be replaced by bootstrap sync)");
-            }
-            
-            
-            // ✈️ AERON-ONLY: Bootstrap logic is handled above in Aeron mode detection
-            // No separate mode-specific bootstrap logic needed
-            
-            // BOOTSTRAP: Hybrid approach for Aeron mode
-            // ===========================================================================
-            // CRITICAL: Aeron Cluster handles Raft log bootstrap (consensus state)
-            // BUT: Oak FileStore segments must be synced separately (content state)
-            // 
-            // Strategy:
-            // - If store is empty AND peers exist → Bootstrap Oak FileStore FIRST
-            // - Then start Aeron Cluster (will handle Raft log bootstrap)
-            // - If store is empty AND no peers → Create genesis, then start Aeron
-            // - If store has data → Start Aeron directly (will replay Raft log)
-            // ===========================================================================
-            BootstrapModeCoordinator.Resolution bootstrapResolution = bootstrapModeCoordinator.resolve(
-                new BootstrapModeCoordinator.StartupContext(
-                    directoryIsEmpty,
-                    needsBootstrapBeforeBuild,
+            genesisStartupCoordinator.initialize(
+                new GenesisStartupCoordinator.StartupContext(
+                    nodeStore,
                     fileStore,
-                    port,
-                    standbyPort,
-                    verifiedBootstrapPrimaryHost,
-                    verifiedBootstrapPrimaryPort,
-                    currentAeronConfig(),
+                    blobStore,
+                    selfUrl,
                     components()
                 )
             );
-            detectedMode = bootstrapResolution.detectedMode();
-            bootstrap = bootstrapResolution.bootstrap();
-            
-            // ✈️ AERON-ONLY: Handle STANDBY bootstrap (sync FileStore, then start Aeron Cluster)
-            if (detectedMode == BootstrapMode.STANDBY) {
-                standbyModeStartupCoordinator.initialize(
-                    new StandbyModeStartupCoordinator.StartupContext(
-                        port,
-                        storeDirectory,
-                        bootstrapResolution.bootstrapPrimaryHost(),
-                        bootstrapResolution.bootstrapPrimaryPort(),
-                        currentAeronConfig(),
-                        bootstrap,
-                        fileStore,
-                        nodeStore,
-                        httpServer,
-                        wallet,
-                        blobStore,
-                        aeronClusterService,
-                        components(),
-                        deferredStartup -> {
-                            aeronClusterService = deferredStartup.aeronClusterService();
-                            aeronClusterLauncher = deferredStartup.startupResult().getLauncher();
-                        }
-                    )
-                );
-            } else if (detectedMode == BootstrapMode.GENESIS) {
-                // GENESIS MODE: DEFER genesis creation until Aeron cluster reaches quorum
-                // NEW ARCHITECTURE: Genesis should be the FIRST consensus write, not a pre-consensus local write
-                // This ensures all validators have identical segment history from genesis
-                log.info("🌍 GENESIS MODE DEFERRED: Will create genesis AFTER Aeron cluster forms");
-                log.info("   Genesis will be created as the first replicated write through consensus");
-                log.info("   This ensures all validators start with identical state");
-            } else {
-                // PRIMARY MODE: Check if genesis already exists before initializing.
-                // Empty stores (no genesis) will have genesis created by elected leader via consensus.
-            }
-
-            if (detectedMode == BootstrapMode.GENESIS || detectedMode == BootstrapMode.PRIMARY) {
-                genesisStartupCoordinator.initialize(
-                    new GenesisStartupCoordinator.StartupContext(
-                        detectedMode,
-                        bootstrap,
-                        standbyPort,
-                        nodeStore,
-                        fileStore,
-                        blobStore,
-                        selfUrl,
-                        components()
-                    )
-                );
-            }
             
         } catch (InvalidFileStoreVersionException e) {
             throw new IOException("Invalid FileStore version", e);
@@ -301,7 +210,6 @@ public class GlobalStoreServer {
             serverActivationCoordinator.activate(
                 new ServerActivationCoordinator.ActivationContext(
                     port,
-                    detectedMode,
                     fileStore,
                     nodeStore,
                     httpServer,
@@ -309,10 +217,8 @@ public class GlobalStoreServer {
                     storeDirectory,
                     this.blobStore,
                     aeronClusterService,
-                    aeronClusterLauncher,
                     components(),
-                    finalClusterWallet,
-                    bootstrap
+                    finalClusterWallet
                 )
             );
 
@@ -392,9 +298,6 @@ public class GlobalStoreServer {
 
         if (revisionGc != null) {
             quietly(revisionGc::close, "✅ Segment GC stopped", "Error stopping segment GC: {}");
-        }
-        if (bootstrap != null) {
-            quietly(bootstrap::shutdown, "✅ Bootstrap services stopped", "Error stopping bootstrap: {}");
         }
         if (aeronClusterService != null) {
             quietly(aeronClusterService::shutdown, "✅ Aeron Cluster stopped", "Error stopping Aeron Cluster: {}");

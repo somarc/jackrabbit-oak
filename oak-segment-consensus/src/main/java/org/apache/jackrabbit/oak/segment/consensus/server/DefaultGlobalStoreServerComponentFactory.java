@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import org.apache.jackrabbit.oak.blob.cloud.ipfs.IPFSDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -98,11 +97,6 @@ public final class DefaultGlobalStoreServerComponentFactory implements GlobalSto
     @Override
     public CidMappingService createCidMappingService(Path storeDir) throws Exception {
         return new CidMappingService(storeDir);
-    }
-
-    @Override
-    public ValidatorBootstrap createValidatorBootstrap(FileStore fileStore, int standbyPort) {
-        return new ValidatorBootstrap(fileStore, standbyPort);
     }
 
     @Override

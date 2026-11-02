@@ -265,14 +265,7 @@
             <version>${oak.version}</version>
         </dependency>
         
-        <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
-        <!-- Note: This is included in oak-segment-tar, but we need Netty explicitly -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>${netty.version}</version>
-        </dependency>
-        <!-- Commons Lang3 (required by Standby) - matches oak-parent version -->
+        <!-- Commons Lang3 - matches oak-parent version -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>

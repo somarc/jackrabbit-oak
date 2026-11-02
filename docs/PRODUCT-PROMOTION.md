@@ -54,7 +54,7 @@ remain excluded. Their historical commits do not make them part of the product.
 |---|---|
 | Root POM | Include consensus and IPFS in the reactor |
 | Parent POM | Downstream build/provenance policy, deployment off by default, existing coverage/documentation configuration |
-| Segment Tar POM | Explicit segment/file/TAR/standby exports that the consensus bundle imports |
+| Segment Tar POM | Explicit segment and segment/file exports that the consensus bundle imports |
 | Assembly and ignore rules | Keep generated consensus packaging outputs out of source distributions |
 | GitHub workflows | Non-publishing Somarc validation, not Apache release or prototype deployment automation |
 

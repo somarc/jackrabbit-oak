@@ -21,10 +21,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.List;
 import java.util.function.Supplier;
 
-import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainRuntimeValidator;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
@@ -35,24 +33,17 @@ final class StartupPreflightCoordinator {
 
     private static final Logger log = LoggerFactory.getLogger(StartupPreflightCoordinator.class);
 
-    private final BootstrapPreflightPlanner bootstrapPreflightPlanner;
     private final Supplier<BlockchainConfig> blockchainConfigSupplier;
 
     StartupPreflightCoordinator() {
-        this(new BootstrapPreflightPlanner());
+        this(BlockchainConfig::getInstance);
     }
 
-    StartupPreflightCoordinator(BootstrapPreflightPlanner bootstrapPreflightPlanner) {
-        this(bootstrapPreflightPlanner, BlockchainConfig::getInstance);
-    }
-
-    StartupPreflightCoordinator(BootstrapPreflightPlanner bootstrapPreflightPlanner,
-                                Supplier<BlockchainConfig> blockchainConfigSupplier) {
-        this.bootstrapPreflightPlanner = bootstrapPreflightPlanner;
+    StartupPreflightCoordinator(Supplier<BlockchainConfig> blockchainConfigSupplier) {
         this.blockchainConfigSupplier = blockchainConfigSupplier;
     }
 
-    PreflightResult prepare(String storeDirectory, int port, AeronClusterConfig aeronConfig) throws IOException {
+    File prepare(String storeDirectory) throws IOException {
         // Fail on a bad blockchain runtime before any storage, HTTP or Aeron resource exists.
         BlockchainRuntimeValidator.validate(blockchainConfigSupplier.get());
 
@@ -70,125 +61,6 @@ final class StartupPreflightCoordinator {
                 "This POC only supports Aeron Cluster consensus. Set consensus.mode=aeron or omit it (defaults to aeron)."
             );
         }
-
-        File storeDir = new File(storeDirectory);
-        boolean directoryIsEmpty = isStoreDirectoryEmpty(storeDir);
-        boolean needsBootstrapBeforeBuild = false;
-        boolean hasVerifiedReachablePeers = false;
-        String verifiedBootstrapPrimaryHost = "";
-        int verifiedBootstrapPrimaryPort = 0;
-
-        if (directoryIsEmpty) {
-            List<String> aeronPeers = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
-            String bootstrapPrimaryHost = RuntimeConfigValueResolver.readString("bootstrap.primary.host", "");
-            String bootstrapPrimaryPortStr = RuntimeConfigValueResolver.readString("bootstrap.primary.port", "");
-            boolean standbyBootstrapEnabled = RuntimeConfigValueResolver.readBoolean(
-                "consensus.aeron.standby.bootstrap.enabled",
-                false
-            );
-            BootstrapPreflightPlanner.Decision preflightDecision = bootstrapPreflightPlanner.plan(
-                directoryIsEmpty,
-                aeronPeers,
-                bootstrapPrimaryHost,
-                bootstrapPrimaryPortStr,
-                standbyBootstrapEnabled,
-                port + 1
-            );
-            needsBootstrapBeforeBuild = preflightDecision.needsBootstrapBeforeBuild();
-            hasVerifiedReachablePeers = preflightDecision.hasVerifiedReachablePeers();
-            verifiedBootstrapPrimaryHost = preflightDecision.verifiedBootstrapPrimaryHost();
-            verifiedBootstrapPrimaryPort = preflightDecision.verifiedBootstrapPrimaryPort();
-
-            logPreflightOutcome(
-                directoryIsEmpty,
-                needsBootstrapBeforeBuild,
-                hasVerifiedReachablePeers,
-                verifiedBootstrapPrimaryHost,
-                verifiedBootstrapPrimaryPort,
-                aeronPeers,
-                bootstrapPrimaryHost
-            );
-        }
-
-        return new PreflightResult(
-            storeDir,
-            directoryIsEmpty,
-            needsBootstrapBeforeBuild,
-            verifiedBootstrapPrimaryHost,
-            verifiedBootstrapPrimaryPort
-        );
-    }
-
-    private static boolean isStoreDirectoryEmpty(File storeDir) {
-        if (storeDir.exists() && storeDir.isDirectory()) {
-            File[] files = storeDir.listFiles((dir, name) ->
-                name.startsWith("data") && name.endsWith(".tar")
-                    || name.equals("journal.log")
-                    || name.startsWith("journal.log"));
-            return files == null || files.length == 0;
-        }
-        return true;
-    }
-
-    private static void logPreflightOutcome(boolean directoryIsEmpty,
-                                            boolean needsBootstrapBeforeBuild,
-                                            boolean hasVerifiedReachablePeers,
-                                            String verifiedBootstrapPrimaryHost,
-                                            int verifiedBootstrapPrimaryPort,
-                                            List<String> aeronPeers,
-                                            String bootstrapPrimaryHost) {
-        if (!directoryIsEmpty) {
-            return;
-        }
-
-        if (hasVerifiedReachablePeers && !verifiedBootstrapPrimaryHost.isEmpty()) {
-            boolean matchedPeerUrl = false;
-            for (String peerUrl : aeronPeers) {
-                try {
-                    java.net.URL url = new java.net.URL(peerUrl);
-                    if (verifiedBootstrapPrimaryHost.equals(url.getHost())) {
-                        log.info("✅ Verified reachable peer: {}", peerUrl);
-                        matchedPeerUrl = true;
-                        break;
-                    }
-                } catch (Exception e) {
-                    // Ignore malformed peer URL in startup logging.
-                }
-            }
-            if (!matchedPeerUrl && !bootstrapPrimaryHost.isEmpty()) {
-                log.info("✅ Verified bootstrap primary: {}:{}",
-                    verifiedBootstrapPrimaryHost, verifiedBootstrapPrimaryPort);
-            }
-        } else if (!bootstrapPrimaryHost.isEmpty()) {
-            log.warn("⚠️  Bootstrap primary configured but not reachable: {}", bootstrapPrimaryHost);
-            log.warn("   Will fall back to GENESIS mode if store is empty");
-        }
-
-        if (needsBootstrapBeforeBuild) {
-            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.warn("⚠️  CRITICAL: Empty store directory detected");
-            log.warn("   Bootstrap needed - verified peer is reachable");
-            log.warn("   This ensures all validators start with same genesis HEAD");
-            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.warn("   Bootstrap primary: {}:{}", verifiedBootstrapPrimaryHost, verifiedBootstrapPrimaryPort);
-        } else if (hasVerifiedReachablePeers) {
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.info("ℹ️  Empty store directory with reachable peers detected");
-            log.info("   Aeron standby bootstrap disabled (default)");
-            log.info("   Starting Aeron cluster directly; consensus leader will create canonical genesis");
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        } else if (directoryIsEmpty) {
-            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-            log.warn("⚠️  Empty store directory detected, but no reachable peers");
-            log.warn("   Will create genesis state (this node becomes genesis)");
-            log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        }
-    }
-
-    record PreflightResult(File storeDir,
-                           boolean directoryEmpty,
-                           boolean needsBootstrapBeforeBuild,
-                           String verifiedBootstrapPrimaryHost,
-                           int verifiedBootstrapPrimaryPort) {
+        return new File(storeDirectory);
     }
 }

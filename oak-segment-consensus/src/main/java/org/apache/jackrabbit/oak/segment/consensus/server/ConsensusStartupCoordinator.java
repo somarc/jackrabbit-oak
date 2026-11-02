@@ -40,24 +40,13 @@ final class ConsensusStartupCoordinator {
 
     StartupOutcome initialize(StartupContext context) throws IOException {
         String consensusEnabled = RuntimeConfigValueResolver.readString("consensus.enabled", "false");
-        String peersConfig = RuntimeConfigValueResolver.readString("consensus.peers", "");
         AeronClusterConfig aeronConfig = context.aeronConfig;
         String selfUrl = GlobalStoreRuntimeConfigUtil.resolveSelfUrl(context.port, aeronConfig);
-        List<String> peerUrls = resolvePeerUrls(aeronConfig, peersConfig);
+        List<String> peerUrls = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
 
         boolean enableConsensus = "true".equalsIgnoreCase(consensusEnabled);
         if (aeronConfig != null && !aeronConfig.enabled()) {
             enableConsensus = false;
-        }
-
-        if (context.standbyMode) {
-            return new StartupOutcome(
-                StartupDisposition.DEFERRED,
-                context.aeronClusterService,
-                null,
-                selfUrl,
-                peerUrls
-            );
         }
 
         if (!enableConsensus) {
@@ -126,16 +115,7 @@ final class ConsensusStartupCoordinator {
         );
     }
 
-    private static List<String> resolvePeerUrls(AeronClusterConfig aeronConfig, String peersConfig) {
-        List<String> peerUrls = GlobalStoreRuntimeConfigUtil.resolvePeerUrls(aeronConfig);
-        if (!peerUrls.isEmpty()) {
-            return peerUrls;
-        }
-        return ServerNetworkUtil.parsePeerUrls(peersConfig);
-    }
-
     record StartupContext(int port,
-                          boolean standbyMode,
                           FileStore fileStore,
                           NodeStore nodeStore,
                           SegmentHttpServer httpServer,
@@ -150,7 +130,6 @@ final class ConsensusStartupCoordinator {
 
     enum StartupDisposition {
         INITIALIZED,
-        DEFERRED,
         DISABLED
     }
 

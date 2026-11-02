@@ -856,30 +856,6 @@ public class OsgiConfigApiHandler {
             "Whether node wallet keystore path is configured",
             "wallet.keystore.path"));
         schema.add(schemaEntry(
-            "nodeRuntimeTuning.standby_bootstrap_enabled",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Enable pre-cluster standby bootstrap",
-            "consensus.aeron.standby.bootstrap.enabled"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.bootstrap_primary_host_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether bootstrap primary host is configured",
-            "bootstrap.primary.host"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.bootstrap_primary_port",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Bootstrap primary standby port",
-            "bootstrap.primary.port"));
-        schema.add(schemaEntry(
             "nodeRuntimeTuning.blobstore_type",
             "string",
             "",
@@ -943,14 +919,6 @@ public class OsgiConfigApiHandler {
             "safe",
             "Optional plain HTTP port when TLS is enabled",
             "http.port"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.mock_epoch_duration_seconds",
-            "long",
-            300L,
-            "runtime-readable",
-            "safe",
-            "Mock-mode epoch duration in seconds",
-            "oak.mock.epoch.duration.seconds|OAK_MOCK_EPOCH_DURATION_SECONDS"));
         schema.add(schemaEntry(
             "nodeRuntimeTuning.aeron_dir_name_configured",
             "boolean",
@@ -1085,11 +1053,6 @@ public class OsgiConfigApiHandler {
         values.put("consensus_mode", readString("consensus.mode", "aeron"));
         values.put("wallet_keystore_path_configured",
             RuntimeConfigValueResolver.hasConfiguredValue("wallet.keystore.path"));
-        values.put("standby_bootstrap_enabled",
-            readBoolean("consensus.aeron.standby.bootstrap.enabled", false));
-        values.put("bootstrap_primary_host_configured",
-            RuntimeConfigValueResolver.hasConfiguredValue("bootstrap.primary.host"));
-        values.put("bootstrap_primary_port", readInt("bootstrap.primary.port", 0));
         values.put("blobstore_type",
             RuntimeConfigValueResolver.readString("blobstore.type", "BLOBSTORE_TYPE", ""));
         values.put("ipfs_api_endpoint_configured",
@@ -1105,11 +1068,6 @@ public class OsgiConfigApiHandler {
         values.put("ipfs_encryption_configured", RuntimeConfigValueResolver.hasText(
             RuntimeConfigValueResolver.readString("ipfs.encryption.keys", "IPFS_ENCRYPTION_KEYS", null)));
         values.put("http_port", readInt("http.port", 0));
-        values.put("mock_epoch_duration_seconds",
-            RuntimeConfigValueResolver.readLongEnvFirst(
-                "oak.mock.epoch.duration.seconds",
-                "OAK_MOCK_EPOCH_DURATION_SECONDS",
-                300L));
         values.put("aeron_dir_name_configured",
             RuntimeConfigValueResolver.hasConfiguredValue("aeron.dir.name"));
         values.put("aeron_cluster_hostnames_configured",
