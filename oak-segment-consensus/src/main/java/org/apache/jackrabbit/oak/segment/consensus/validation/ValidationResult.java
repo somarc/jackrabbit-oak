@@ -80,19 +80,6 @@ public class ValidationResult<T> {
     }
     
     /**
-     * Create a failed validation result with an error message and custom HTTP status.
-     * 
-     * @param error the error message
-     * @param httpStatus the HTTP status code to suggest
-     * @param <T> the type of the expected value
-     * @return an invalid result
-     */
-    @NotNull
-    public static <T> ValidationResult<T> error(@NotNull String error, int httpStatus) {
-        return new ValidationResult<>(false, error, null, httpStatus);
-    }
-    
-    /**
      * Check if validation passed.
      * 
      * @return true if valid, false otherwise
@@ -128,14 +115,5 @@ public class ValidationResult<T> {
      */
     public int getHttpStatus() {
         return httpStatus;
-    }
-    
-    @Override
-    public String toString() {
-        if (valid) {
-            return "ValidationResult{valid=true, value=" + normalizedValue + "}";
-        } else {
-            return "ValidationResult{valid=false, error='" + error + "', httpStatus=" + httpStatus + "}";
-        }
     }
 }
