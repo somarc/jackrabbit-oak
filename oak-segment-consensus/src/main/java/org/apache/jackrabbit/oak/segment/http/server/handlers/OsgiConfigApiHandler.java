@@ -641,30 +641,6 @@ public class OsgiConfigApiHandler {
             "guarded",
             "Global request budget",
             RateLimiter.PROP_GLOBAL_RPS));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.warn_logging_enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "safe",
-            "Enable throttling warning logs",
-            RateLimiter.PROP_WARN_LOGGING_ENABLED));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.warn_log_interval_ms",
-            "long",
-            30000L,
-            "startup-only",
-            "safe",
-            "Warning log rate-limit interval",
-            RateLimiter.PROP_WARN_LOG_INTERVAL_MS));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.warn_log_sample_size",
-            "int",
-            250,
-            "startup-only",
-            "safe",
-            "Minimum throttles before warning log",
-            RateLimiter.PROP_WARN_LOG_SAMPLE_SIZE));
 
         schema.add(schemaEntry(
             "tlsTuning.enabled",

@@ -77,6 +77,16 @@ public class RuntimeConfigValueResolverTest {
     }
 
     @Test
+    public void testEnvFirstReadSkipsBlankValues() {
+        System.setProperty(PROP_VALUE, "  ");
+        assertEquals("default", RuntimeConfigValueResolver.readStringEnvFirst(PROP_VALUE, "OAK_TEST_UNSET", "default"));
+
+        RuntimePropertyOverrideRegistry.setOverrides(NAMESPACE, Collections.singletonMap(PROP_VALUE, ""));
+        System.setProperty(PROP_VALUE, "12");
+        assertEquals(12L, RuntimeConfigValueResolver.readLongEnvFirst(PROP_VALUE, "OAK_TEST_UNSET", 7L));
+    }
+
+    @Test
     public void testConfiguredValueReflectsOverrideAndSystemProperty() {
         assertFalse(RuntimeConfigValueResolver.hasConfiguredValue(PROP_VALUE));
 

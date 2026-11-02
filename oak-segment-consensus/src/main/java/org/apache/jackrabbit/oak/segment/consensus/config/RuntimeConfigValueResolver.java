@@ -47,17 +47,18 @@ public final class RuntimeConfigValueResolver {
         return envValue != null ? envValue : defaultValue;
     }
 
+    /** Environment variable before system property; blank values at any level are skipped. */
     public static String readStringEnvFirst(String sysProp, String envVar, String defaultValue) {
         String override = RuntimePropertyOverrideRegistry.get(sysProp);
-        if (override != null) {
+        if (hasText(override)) {
             return override;
         }
         String envValue = System.getenv(envVar);
-        if (envValue != null) {
+        if (hasText(envValue)) {
             return envValue;
         }
         String propValue = System.getProperty(sysProp);
-        return propValue != null ? propValue : defaultValue;
+        return hasText(propValue) ? propValue : defaultValue;
     }
 
     public static boolean readBoolean(String sysProp, boolean defaultValue) {

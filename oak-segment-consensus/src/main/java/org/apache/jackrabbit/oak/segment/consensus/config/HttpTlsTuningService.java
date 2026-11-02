@@ -65,8 +65,6 @@ public final class HttpTlsTuningService {
         putIfText(overrides, TlsConfiguration.PROP_KEYSTORE_PATH, config.keystore_path());
         putIfText(overrides, TlsConfiguration.PROP_KEYSTORE_PASSWORD, config.keystore_password());
         putIfText(overrides, TlsConfiguration.PROP_KEYSTORE_TYPE, config.keystore_type());
-        putIfText(overrides, TlsConfiguration.PROP_CERT_PATH, config.cert_path());
-        putIfText(overrides, TlsConfiguration.PROP_KEY_PATH, config.key_path());
         putIfText(overrides, TlsConfiguration.PROP_TRUSTSTORE_PATH, config.truststore_path());
         putIfText(overrides, TlsConfiguration.PROP_TRUSTSTORE_PASSWORD, config.truststore_password());
         putIfText(overrides, TlsConfiguration.PROP_CLIENT_AUTH, config.client_auth());
