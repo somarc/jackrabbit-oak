@@ -27,10 +27,17 @@ package org.apache.jackrabbit.oak.segment.consensus.util;
  * </pre>
  *
  * <p>The first three address bytes form a three-level hex fan-out (256^3 buckets).
+ *
+ * <p>Every node on a wallet path above a record is a {@link #CONTAINER_TYPE}; the record a
+ * write targets is a {@link #RECORD_TYPE}. Containers are unordered because Oak keeps an
+ * order list on every orderable parent, which degrades as a folder grows.
  */
 public class WalletPathUtil {
     
     private static final String OAK_CHAIN_ROOT = "/oak-chain";
+
+    public static final String CONTAINER_TYPE = "oak:Unstructured";
+    public static final String RECORD_TYPE = "nt:unstructured";
     
     /**
      * Get the shard levels for path construction.

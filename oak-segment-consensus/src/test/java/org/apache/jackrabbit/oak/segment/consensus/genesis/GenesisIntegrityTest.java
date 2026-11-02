@@ -28,11 +28,13 @@ import org.apache.jackrabbit.oak.spi.blob.data.FileDataStore;
 import org.apache.jackrabbit.oak.plugins.blob.datastore.DataStoreBlobStore;
 import org.apache.jackrabbit.oak.segment.SegmentNodeStoreBuilders;
 import org.apache.jackrabbit.oak.segment.consensus.config.ConsensusSafety;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.file.FileStoreBuilder;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Rule;
 import org.junit.Test;
@@ -88,6 +90,26 @@ public class GenesisIntegrityTest {
         MemoryNodeStore store = populatedStore();
         NodeBuilder root = store.getRoot().builder();
         genesis(root).getChildNode("protocol").setProperty("chainId", "tampered");
+        store.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        assertThrows(IllegalStateException.class, () -> new CanonicalGenesisContent(store, null).verifyExisting());
+    }
+
+    @Test
+    public void pathAboveTheGenesisRecordIsUnorderedContainers() throws Exception {
+        NodeState node = populatedStore().getRoot();
+        for (String part : WalletPathUtil.getContentPath(CanonicalGenesisContent.GENESIS_ADDRESS).substring(1).split("/")) {
+            node = node.getChildNode(part);
+            assertEquals(part, Type.NAME, node.getProperty("jcr:primaryType").getType());
+            assertEquals(part, WalletPathUtil.CONTAINER_TYPE, node.getName("jcr:primaryType"));
+        }
+        assertEquals(WalletPathUtil.RECORD_TYPE, node.getChildNode("genesis").getName("jcr:primaryType"));
+    }
+
+    @Test
+    public void verificationRejectsAnOrderedShardFolder() throws Exception {
+        MemoryNodeStore store = populatedStore();
+        NodeBuilder root = store.getRoot().builder();
+        root.getChildNode("oak-chain").getChildNode("00").setProperty("jcr:primaryType", WalletPathUtil.RECORD_TYPE, Type.NAME);
         store.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         assertThrows(IllegalStateException.class, () -> new CanonicalGenesisContent(store, null).verifyExisting());
     }

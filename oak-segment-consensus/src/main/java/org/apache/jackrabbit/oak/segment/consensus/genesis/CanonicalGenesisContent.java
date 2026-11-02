@@ -53,7 +53,7 @@ public final class CanonicalGenesisContent {
     private static final String GENESIS_IMAGE_RESOURCE = "genesis-assets/do-it-live.jpeg";
     private static final String GENESIS_MESSAGE = "DO IT LIVE!";
     private static final String CHAIN_ID = "oak-blockchain-aem";
-    private static final String VERSION = "2.1.0";
+    private static final String VERSION = "2.2.0";
     private static final String IMAGE_SHA256 = "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442";
     private static final String GENESIS_WALLET_PATH = WalletPathUtil.getShardRoot(GENESIS_ADDRESS);
     private static final String CANONICAL_GENESIS_PATH = WalletPathUtil.getContentPath(GENESIS_ADDRESS) + "/genesis";
@@ -150,7 +150,7 @@ public final class CanonicalGenesisContent {
                 ancestor = ancestor.getChildNode(part);
                 if (!ancestor.hasProperty("jcr:primaryType")
                     || ancestor.getProperty("jcr:primaryType").getType() != Type.NAME
-                    || !"nt:unstructured".equals(ancestor.getProperty("jcr:primaryType").getValue(Type.NAME))) {
+                    || !WalletPathUtil.CONTAINER_TYPE.equals(ancestor.getProperty("jcr:primaryType").getValue(Type.NAME))) {
                     throw new IllegalStateException("Invalid canonical genesis ancestor: " + part);
                 }
             }
@@ -185,21 +185,21 @@ public final class CanonicalGenesisContent {
         String genesisHost = extractHost(genesisValidator);
 
         NodeBuilder oakChain = rootBuilder.child("oak-chain");
-        oakChain.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        oakChain.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
         String[] levels = WalletPathUtil.getShardLevels(GENESIS_ADDRESS);
 
         NodeBuilder level1 = oakChain.child(levels[0]);
-        level1.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        level1.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
         NodeBuilder level2 = level1.child(levels[1]);
-        level2.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        level2.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
         NodeBuilder level3 = level2.child(levels[2]);
-        level3.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        level3.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
         NodeBuilder genesisWallet = level3.child(GENESIS_ADDRESS);
-        genesisWallet.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        genesisWallet.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
         genesisWallet.setProperty("wallet", GENESIS_ADDRESS);
         genesisWallet.setProperty("role", "genesis");
         genesisWallet.setProperty("walletCreated", normalizedTimestamp);
@@ -212,7 +212,7 @@ public final class CanonicalGenesisContent {
         genesisWallet.setProperty("verified", true);
 
         NodeBuilder content = genesisWallet.child("content");
-        content.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
+        content.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
 
         NodeBuilder genesis = content.child("genesis");
         genesis.setProperty("jcr:primaryType", "nt:unstructured", Type.NAME);
@@ -307,6 +307,8 @@ public final class CanonicalGenesisContent {
             "What wallets write below /content. Oak Chain holds records: small, typed statements that someone may have to prove later. "
                 + "Pages, layout, and drafts stay at the edge; pages cite records.");
         shapes.setProperty("pathPattern", "/oak-chain/{L1}/{L2}/{L3}/{wallet}[/{organization}]/content/{collection}/{name}");
+        shapes.setProperty("nodeTypes", "Every node above {name} is " + WalletPathUtil.CONTAINER_TYPE
+            + " (unordered, so wide collections stay cheap); the record at {name} is " + WalletPathUtil.RECORD_TYPE + ".");
         shapes.setProperty("fieldTypes", "String, String[], Long, Boolean, Date (ISO-8601, UTC)");
         shapes.setProperty("howToRead",
             "Every shape lists its fields and carries an example that is itself a well-formed record. The example is the specification.");

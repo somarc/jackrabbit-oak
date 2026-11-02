@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.plugins.blob.BlobStoreBlob;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority;
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
+import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
@@ -237,6 +238,9 @@ public class WriteApplicationService {
             for (int i = 1; i < pathParts.length - 1; i++) {
                 if (!pathParts[i].isEmpty()) {
                     current = current.child(pathParts[i]);
+                    if (current.getProperty("jcr:primaryType") == null) {
+                        current.setProperty("jcr:primaryType", WalletPathUtil.CONTAINER_TYPE, Type.NAME);
+                    }
                     
                     // Detect wallet node (matches pattern: 0x[a-f0-9]{40})
                     if (pathParts[i].matches("0x[a-f0-9]{40}")) {
@@ -379,7 +383,7 @@ public class WriteApplicationService {
             @Nullable String proposalId,
             long appliedAt) {
         
-        contentNode.setProperty("jcr:primaryType", "nt:unstructured");
+        contentNode.setProperty("jcr:primaryType", WalletPathUtil.RECORD_TYPE, Type.NAME);
         contentNode.setProperty("contentType", contentType != null ? contentType : "page");
         contentNode.setProperty("message", message != null ? message : "");
         contentNode.setProperty("timestamp", appliedAt);
@@ -504,7 +508,6 @@ public class WriteApplicationService {
         if (isNewWallet) {
             log.info("🆕 Creating new wallet node with metadata: {}", walletNodeName);
             
-            walletNode.setProperty("jcr:primaryType", "nt:unstructured");
             walletNode.setProperty("wallet", walletAddress);
             walletNode.setProperty("walletCreated", appliedAt);
             walletNode.setProperty("nodeType", "wallet-root");
