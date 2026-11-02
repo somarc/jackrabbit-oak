@@ -21,10 +21,10 @@ import io.aeron.CommonContext;
 
 import java.util.List;
 
-final class AeronClusterTopology {
+public final class AeronClusterTopology {
 
     static final String PORT_BASE_PROPERTY = "aeron.cluster.basePort";
-    private static final int DEFAULT_PORT_BASE = 9000;
+    public static final int DEFAULT_PORT_BASE = 9000;
     private static final int PORTS_PER_NODE = 100;
     private static final int ARCHIVE_CONTROL_PORT_OFFSET = 1;
     static final int CLIENT_FACING_PORT_OFFSET = 2;

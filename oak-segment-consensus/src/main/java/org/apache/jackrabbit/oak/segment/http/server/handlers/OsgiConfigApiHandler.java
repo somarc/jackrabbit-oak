@@ -16,13 +16,19 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterTopology;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterTuningIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.SnapshotTrigger;
+import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfigIntrospection;
 import org.apache.jackrabbit.oak.segment.consensus.config.ConsensusSafety;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.apache.jackrabbit.oak.segment.consensus.config.StorageBackendConfig;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuning;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueTuningIntrospection;
+import org.apache.jackrabbit.oak.segment.consensus.service.FileStoreFlushService;
 import org.apache.jackrabbit.oak.segment.http.server.AuthTokenValidator;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiter;
 import org.apache.jackrabbit.oak.segment.http.server.RateLimiterTuningIntrospection;
@@ -215,778 +221,120 @@ public class OsgiConfigApiHandler {
     List<Map<String, Object>> buildSchema() {
         List<Map<String, Object>> schema = new ArrayList<>();
 
-        schema.add(schemaEntry(
-            "aeronClusterTuning.enabled",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Enable Aeron cluster consensus",
-            "consensus.enabled"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.node_id",
-            "int",
-            0,
-            "startup-only",
-            "guarded",
-            "Aeron cluster node id",
-            "aeron.cluster.nodeId"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.self_url_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether an explicit self URL is configured",
-            "consensus.self.url"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.peer_urls_count",
-            "int",
-            0,
-            "startup-only",
-            "guarded",
-            "Number of configured peer URLs",
-            "consensus.peers"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.observe_elections",
-            "boolean",
-            false,
-            "startup-only",
-            "safe",
-            "Observe elections before genesis writes (OSGi config only; off in the standalone runtime)",
-            "osgi:AeronClusterConfig.observeElections"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.log_cluster_state_details",
-            "boolean",
-            false,
-            "startup-only",
-            "safe",
-            "Enable verbose cluster startup logging",
-            "osgi:AeronClusterConfig.logClusterStateDetails"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.cluster_environment",
-            "string",
-            "",
-            "startup-only",
-            "guarded",
-            "Environment label (dev/staging/prod), reported only",
-            "oak.cluster.environment"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.session_timeout_minutes",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Aeron session timeout override",
-            "oak.cluster.session.timeout.minutes"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.media_driver_timeout_ms",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "MediaDriver timeout override",
-            "oak.cluster.media.driver.timeout.ms"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.cluster_term_length_bytes",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Aeron cluster term length",
-            "oak.cluster.term.length.bytes"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.peer_probe_mode",
-            "string",
-            "",
-            "startup-only",
-            "guarded",
-            "Peer probe mode for health checks",
-            "oak.health.peerProbeMode"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.socket_send_buffer_bytes",
-            "string",
-            "auto",
-            "startup-only",
-            "guarded",
-            "Aeron socket send buffer size",
-            "aeron.socket.so_sndbuf"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.socket_receive_buffer_bytes",
-            "string",
-            "auto",
-            "startup-only",
-            "guarded",
-            "Aeron socket receive buffer size",
-            "aeron.socket.so_rcvbuf"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.publication_term_buffer_length_bytes",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Aeron publication term buffer length",
-            "oak.cluster.publication.term.buffer.length.bytes"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.heartbeat_max_age_ms",
-            "long",
-            0L,
-            "startup-only",
-            "guarded",
-            "Heartbeat age threshold for liveness",
-            "oak.cluster.heartbeat.maxAgeMs"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.reachability_cache_ms",
-            "long",
-            0L,
-            "startup-only",
-            "guarded",
-            "Peer reachability cache duration",
-            "oak.cluster.reachability.cacheMs"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.reachability_connect_timeout_ms",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Peer reachability connect timeout",
-            "oak.cluster.reachability.connectTimeoutMs"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.reachability_read_timeout_ms",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "Peer reachability read timeout",
-            "oak.cluster.reachability.readTimeoutMs"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.reconnect_max_attempts",
-            "int",
-            0,
-            "startup-only",
-            "guarded",
-            "Peer reconnect attempt ceiling",
-            "oak.cluster.reconnect.maxAttempts"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.max_concurrent_sessions",
-            "int",
-            0,
-            "startup-only",
-            "expert-only",
-            "ConsensusModule max concurrent sessions override",
-            "oak.cluster.max.concurrent.sessions"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.cluster_base_port",
-            "int",
-            9000,
-            "startup-only",
-            "expert-only",
-            "Aeron base port; member ports are derived from it",
-            "aeron.cluster.basePort"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.effective_session_timeout_seconds",
-            "long",
-            30L,
-            "startup-only",
-            "expert-only",
-            "Effective Aeron session timeout; the seconds property takes precedence over minutes",
-            "oak.cluster.session.timeout.seconds"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.snapshot_interval_ms",
-            "long",
-            600000L,
-            "startup-only",
-            "guarded",
-            "Leader snapshot interval by elapsed time (0 disables)",
-            "oak.aeron.snapshot.intervalMs"));
-        schema.add(schemaEntry(
-            "aeronClusterTuning.snapshot_entry_interval",
-            "long",
-            10000L,
-            "startup-only",
-            "guarded",
-            "Leader snapshot interval by applied entries (0 disables)",
-            "oak.aeron.snapshot.entryInterval"));
+        schema.add(schemaEntry("aeronClusterTuning.enabled", "boolean", false, "startup-only", "guarded", "Enable Aeron cluster consensus", "consensus.enabled"));
+        schema.add(schemaEntry("aeronClusterTuning.node_id", "int", 0, "startup-only", "guarded", "Aeron cluster node id", "aeron.cluster.nodeId"));
+        schema.add(schemaEntry("aeronClusterTuning.self_url_configured", "boolean", false, "startup-only", "guarded", "Whether an explicit self URL is configured", "consensus.self.url"));
+        schema.add(schemaEntry("aeronClusterTuning.peer_urls_count", "int", 0, "startup-only", "guarded", "Number of configured peer URLs", "consensus.peers"));
+        schema.add(schemaEntry("aeronClusterTuning.observe_elections", "boolean", false, "startup-only", "safe", "Observe elections before genesis writes (OSGi config only; off in the standalone runtime)", "osgi:AeronClusterConfig.observeElections"));
+        schema.add(schemaEntry("aeronClusterTuning.log_cluster_state_details", "boolean", false, "startup-only", "safe", "Enable verbose cluster startup logging", "osgi:AeronClusterConfig.logClusterStateDetails"));
+        schema.add(schemaEntry("aeronClusterTuning.cluster_environment", "string", "", "startup-only", "guarded", "Environment label (dev/staging/prod), reported only", "oak.cluster.environment"));
+        schema.add(schemaEntry("aeronClusterTuning.session_timeout_minutes", "int", 0, "startup-only", "expert-only", "Aeron session timeout override", "oak.cluster.session.timeout.minutes"));
+        schema.add(schemaEntry("aeronClusterTuning.media_driver_timeout_ms", "int", 0, "startup-only", "expert-only", "MediaDriver timeout override", "oak.cluster.media.driver.timeout.ms"));
+        schema.add(schemaEntry("aeronClusterTuning.cluster_term_length_bytes", "int", 0, "startup-only", "expert-only", "Aeron cluster term length", "oak.cluster.term.length.bytes"));
+        schema.add(schemaEntry("aeronClusterTuning.peer_probe_mode", "string", "", "startup-only", "guarded", "Peer probe mode for health checks", "oak.health.peerProbeMode"));
+        schema.add(schemaEntry("aeronClusterTuning.socket_send_buffer_bytes", "string", "auto", "startup-only", "guarded", "Aeron socket send buffer size", "aeron.socket.so_sndbuf"));
+        schema.add(schemaEntry("aeronClusterTuning.socket_receive_buffer_bytes", "string", "auto", "startup-only", "guarded", "Aeron socket receive buffer size", "aeron.socket.so_rcvbuf"));
+        schema.add(schemaEntry("aeronClusterTuning.publication_term_buffer_length_bytes", "int", 0, "startup-only", "expert-only", "Aeron publication term buffer length", "oak.cluster.publication.term.buffer.length.bytes"));
+        schema.add(schemaEntry("aeronClusterTuning.heartbeat_max_age_ms", "long", 0L, "startup-only", "guarded", "Heartbeat age threshold for liveness", "oak.cluster.heartbeat.maxAgeMs"));
+        schema.add(schemaEntry("aeronClusterTuning.reachability_cache_ms", "long", 0L, "startup-only", "guarded", "Peer reachability cache duration", "oak.cluster.reachability.cacheMs"));
+        schema.add(schemaEntry("aeronClusterTuning.reachability_connect_timeout_ms", "int", 0, "startup-only", "expert-only", "Peer reachability connect timeout", "oak.cluster.reachability.connectTimeoutMs"));
+        schema.add(schemaEntry("aeronClusterTuning.reachability_read_timeout_ms", "int", 0, "startup-only", "expert-only", "Peer reachability read timeout", "oak.cluster.reachability.readTimeoutMs"));
+        schema.add(schemaEntry("aeronClusterTuning.reconnect_max_attempts", "int", 0, "startup-only", "guarded", "Peer reconnect attempt ceiling", "oak.cluster.reconnect.maxAttempts"));
+        schema.add(schemaEntry("aeronClusterTuning.max_concurrent_sessions", "int", 0, "startup-only", "expert-only", "ConsensusModule max concurrent sessions override", "oak.cluster.max.concurrent.sessions"));
+        schema.add(schemaEntry("aeronClusterTuning.cluster_base_port", "int", AeronClusterTopology.DEFAULT_PORT_BASE, "startup-only", "expert-only", "Aeron base port; member ports are derived from it", "aeron.cluster.basePort"));
+        schema.add(schemaEntry("aeronClusterTuning.effective_session_timeout_seconds", "long", AeronClusterLauncher.DEFAULT_SESSION_TIMEOUT_SECONDS, "startup-only", "expert-only", "Effective Aeron session timeout; the seconds property takes precedence over minutes", "oak.cluster.session.timeout.seconds"));
+        schema.add(schemaEntry("aeronClusterTuning.snapshot_interval_ms", "long", SnapshotTrigger.DEFAULT_INTERVAL_MS, "startup-only", "guarded", "Leader snapshot interval by elapsed time (0 disables)", "oak.aeron.snapshot.intervalMs"));
+        schema.add(schemaEntry("aeronClusterTuning.snapshot_entry_interval", "long", SnapshotTrigger.DEFAULT_ENTRY_INTERVAL, "startup-only", "guarded", "Leader snapshot interval by applied entries (0 disables)", "oak.aeron.snapshot.entryInterval"));
 
-        schema.add(schemaEntry(
-            "proposalQueueTuning.max_message_batch",
-            "int",
-            10,
-            "runtime-readable",
-            "guarded",
-            "Max Aeron batches per sender cycle",
-            "oak.proposal.batch.max"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.finalization_chunk_size",
-            "int",
-            3,
-            "runtime-readable",
-            "guarded",
-            "Max proposals released per chunk when draining verified work to Aeron",
-            "oak.proposal.finalization.chunk.size"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.finalization_chunk_delay_ms",
-            "long",
-            0L,
-            "runtime-readable",
-            "guarded",
-            "Optional delay between verified release chunks; 0 disables pacing",
-            "oak.proposal.finalization.chunk.delay.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.max_pending_messages",
-            "long",
-            10000,
-            "runtime-readable",
-            "expert-only",
-            "Backpressure pending-message ceiling",
-            "oak.consensus.max.pending.messages"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.backpressure_timeout_ms",
-            "long",
-            30000,
-            "runtime-readable",
-            "expert-only",
-            "Timeout while waiting under backpressure",
-            "oak.consensus.backpressure.timeout.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.persistence_flush_interval_ms",
-            "long",
-            250,
-            "runtime-readable",
-            "guarded",
-            "Durability flush interval",
-            "oak.proposal.persistence.flush.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.persistence_flush_batch",
-            "int",
-            100,
-            "runtime-readable",
-            "guarded",
-            "Durability flush batch threshold",
-            "oak.proposal.persistence.flush.batch"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.persistence_enabled",
-            "boolean",
-            true,
-            "runtime-readable",
-            "guarded",
-            "Enable persistent queue snapshots",
-            "oak.proposal.persistence.enabled"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.confirmation_timeout_ms",
-            "long",
-            300000L,
-            "runtime-readable",
-            "guarded",
-            "Proposal confirmation timeout",
-            "oak.proposal.confirmation.timeout.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.required_confirmations",
-            "int",
-            1,
-            "runtime-readable",
-            "guarded",
-            "Minimum payment confirmations before verifier release",
-            "oak.proposal.confirmation.required"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.restore_timeout_ms",
-            "long",
-            300000L,
-            "runtime-readable",
-            "guarded",
-            "Proposal restore timeout",
-            "oak.proposal.restore.timeout.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.verifier_threads",
-            "int",
-            1,
-            "runtime-readable",
-            "expert-only",
-            "Verifier worker thread count",
-            "oak.proposal.verifier.threads"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.processed_retention_ms",
-            "long",
-            600000L,
-            "runtime-readable",
-            "guarded",
-            "Retention of processed proposal ids",
-            "oak.proposal.processed.retention.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.backpressure_park_nanos",
-            "long",
-            1000000L,
-            "runtime-readable",
-            "expert-only",
-            "Backpressure park interval",
-            "oak.consensus.backpressure.park.nanos"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.counter_rotation_interval_ms",
-            "long",
-            86400000L,
-            "runtime-readable",
-            "guarded",
-            "Counter rotation interval",
-            "oak.proposal.counter.rotation.ms"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.release_mode",
-            "string",
-            "adaptive-active",
-            "runtime-readable",
-            "guarded",
-            "Verified release pipeline mode (adaptive-active is the only mode; every other value resolves to it)",
-            "oak.proposal.release.mode"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.validator_hosted_binary_upload_enabled",
-            "boolean",
-            true,
-            "runtime-readable",
-            "guarded",
-            "Enable validator-hosted binary upload handling",
-            "oak.proposal.validator.binary.upload.enabled"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.max_retry_count",
-            "int",
-            5,
-            "runtime-readable",
-            "guarded",
-            "Proposal retry ceiling",
-            "oak.proposal.max.retry.count"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.payload_inline_max_bytes",
-            "long",
-            8192L,
-            "runtime-readable",
-            "expert-only",
-            "Largest payload kept inline before spilling to disk",
-            "oak.proposal.payload.inline.max.bytes"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.payload_spill_soft_pending",
-            "long",
-            10000L,
-            "runtime-readable",
-            "expert-only",
-            "Pending-proposal count at which payloads start spilling",
-            "oak.proposal.payload.spill.soft.pending"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.payload_spill_max_bytes",
-            "long",
-            2147483648L,
-            "runtime-readable",
-            "expert-only",
-            "Spill directory byte ceiling",
-            "oak.proposal.payload.spill.max.bytes"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.hard_max_pending_proposals",
-            "long",
-            20000L,
-            "runtime-readable",
-            "expert-only",
-            "Hard pending-proposal ceiling before admission is refused",
-            "oak.proposal.hard.max.pending"));
-        schema.add(schemaEntry(
-            "proposalQueueTuning.payload_spill_dir",
-            "string",
-            "",
-            "runtime-readable",
-            "guarded",
-            "Payload spill directory (empty uses the store default)",
-            "oak.proposal.payload.spill.dir"));
+        schema.add(schemaEntry("proposalQueueTuning.max_message_batch", "int", ProposalQueueTuning.DEFAULT_MAX_MESSAGE_BATCH, "runtime-readable", "guarded", "Max Aeron batches per sender cycle", "oak.proposal.batch.max"));
+        schema.add(schemaEntry("proposalQueueTuning.finalization_chunk_size", "int", ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_SIZE, "runtime-readable", "guarded", "Max proposals released per chunk when draining verified work to Aeron", "oak.proposal.finalization.chunk.size"));
+        schema.add(schemaEntry("proposalQueueTuning.finalization_chunk_delay_ms", "long", ProposalQueueTuning.DEFAULT_FINALIZATION_CHUNK_DELAY_MS, "runtime-readable", "guarded", "Optional delay between verified release chunks; 0 disables pacing", "oak.proposal.finalization.chunk.delay.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.max_pending_messages", "long", ProposalQueueTuning.DEFAULT_MAX_PENDING_MESSAGES, "runtime-readable", "expert-only", "Backpressure pending-message ceiling", "oak.consensus.max.pending.messages"));
+        schema.add(schemaEntry("proposalQueueTuning.backpressure_timeout_ms", "long", ProposalQueueTuning.DEFAULT_BACKPRESSURE_TIMEOUT_MS, "runtime-readable", "expert-only", "Timeout while waiting under backpressure", "oak.consensus.backpressure.timeout.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.persistence_flush_interval_ms", "long", ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS, "runtime-readable", "guarded", "Durability flush interval", "oak.proposal.persistence.flush.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.persistence_flush_batch", "int", ProposalQueueTuning.DEFAULT_PERSISTENCE_FLUSH_BATCH, "runtime-readable", "guarded", "Durability flush batch threshold", "oak.proposal.persistence.flush.batch"));
+        schema.add(schemaEntry("proposalQueueTuning.persistence_enabled", "boolean", ProposalQueueTuning.DEFAULT_PERSISTENCE_ENABLED, "runtime-readable", "guarded", "Enable persistent queue snapshots", "oak.proposal.persistence.enabled"));
+        schema.add(schemaEntry("proposalQueueTuning.confirmation_timeout_ms", "long", ProposalQueueTuning.DEFAULT_CONFIRMATION_TIMEOUT_MS, "runtime-readable", "guarded", "Proposal confirmation timeout", "oak.proposal.confirmation.timeout.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.required_confirmations", "int", 1, "runtime-readable", "guarded", "Minimum payment confirmations before verifier release", "oak.proposal.confirmation.required"));
+        schema.add(schemaEntry("proposalQueueTuning.restore_timeout_ms", "long", ProposalQueueTuning.DEFAULT_CONFIRMATION_TIMEOUT_MS, "runtime-readable", "guarded", "Proposal restore timeout", "oak.proposal.restore.timeout.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.verifier_threads", "int", ProposalQueueTuning.DEFAULT_VERIFIER_THREADS, "runtime-readable", "expert-only", "Verifier worker thread count", "oak.proposal.verifier.threads"));
+        schema.add(schemaEntry("proposalQueueTuning.processed_retention_ms", "long", ProposalQueueTuning.DEFAULT_PROCESSED_RETENTION_MS, "runtime-readable", "guarded", "Retention of processed proposal ids", "oak.proposal.processed.retention.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.backpressure_park_nanos", "long", ProposalQueueTuning.DEFAULT_BACKPRESSURE_PARK_NANOS, "runtime-readable", "expert-only", "Backpressure park interval", "oak.consensus.backpressure.park.nanos"));
+        schema.add(schemaEntry("proposalQueueTuning.counter_rotation_interval_ms", "long", ProposalQueueTuning.DEFAULT_COUNTER_ROTATION_INTERVAL_MS, "runtime-readable", "guarded", "Counter rotation interval", "oak.proposal.counter.rotation.ms"));
+        schema.add(schemaEntry("proposalQueueTuning.release_mode", "string", ProposalQueueTuning.DEFAULT_RELEASE_MODE, "runtime-readable", "guarded", "Verified release pipeline mode (adaptive-active is the only mode; every other value resolves to it)", "oak.proposal.release.mode"));
+        schema.add(schemaEntry("proposalQueueTuning.validator_hosted_binary_upload_enabled", "boolean", ProposalQueueTuning.DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED, "runtime-readable", "guarded", "Enable validator-hosted binary upload handling", "oak.proposal.validator.binary.upload.enabled"));
+        schema.add(schemaEntry("proposalQueueTuning.max_retry_count", "int", ProposalQueueTuning.DEFAULT_MAX_RETRY_COUNT, "runtime-readable", "guarded", "Proposal retry ceiling", "oak.proposal.max.retry.count"));
+        schema.add(schemaEntry("proposalQueueTuning.payload_inline_max_bytes", "long", ProposalQueueTuning.DEFAULT_PAYLOAD_INLINE_MAX_BYTES, "runtime-readable", "expert-only", "Largest payload kept inline before spilling to disk", "oak.proposal.payload.inline.max.bytes"));
+        schema.add(schemaEntry("proposalQueueTuning.payload_spill_soft_pending", "long", ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_SOFT_PENDING, "runtime-readable", "expert-only", "Pending-proposal count at which payloads start spilling", "oak.proposal.payload.spill.soft.pending"));
+        schema.add(schemaEntry("proposalQueueTuning.payload_spill_max_bytes", "long", ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_MAX_BYTES, "runtime-readable", "expert-only", "Spill directory byte ceiling", "oak.proposal.payload.spill.max.bytes"));
+        schema.add(schemaEntry("proposalQueueTuning.hard_max_pending_proposals", "long", ProposalQueueTuning.DEFAULT_HARD_MAX_PENDING_PROPOSALS, "runtime-readable", "expert-only", "Hard pending-proposal ceiling before admission is refused", "oak.proposal.hard.max.pending"));
+        schema.add(schemaEntry("proposalQueueTuning.payload_spill_dir", "string", ProposalQueueTuning.DEFAULT_PAYLOAD_SPILL_DIR, "runtime-readable", "guarded", "Payload spill directory (empty uses the store default)", "oak.proposal.payload.spill.dir"));
 
-        schema.add(schemaEntry(
-            "rateLimiterTuning.enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "safe",
-            "Enable HTTP rate limiting",
-            RateLimiter.PROP_ENABLED));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.requests_per_second",
-            "int",
-            100,
-            "startup-only",
-            "guarded",
-            "Per-client request budget",
-            RateLimiter.PROP_REQUESTS_PER_SECOND));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.write_rps",
-            "int",
-            10,
-            "startup-only",
-            "guarded",
-            "Per-wallet write budget",
-            RateLimiter.PROP_WRITE_RPS));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.burst_size",
-            "int",
-            200,
-            "startup-only",
-            "guarded",
-            "Per-client burst size",
-            RateLimiter.PROP_BURST_SIZE));
-        schema.add(schemaEntry(
-            "rateLimiterTuning.global_rps",
-            "int",
-            1000,
-            "startup-only",
-            "guarded",
-            "Global request budget",
-            RateLimiter.PROP_GLOBAL_RPS));
+        schema.add(schemaEntry("rateLimiterTuning.enabled", "boolean", true, "startup-only", "safe", "Enable HTTP rate limiting", RateLimiter.PROP_ENABLED));
+        schema.add(schemaEntry("rateLimiterTuning.requests_per_second", "int", RateLimiter.DEFAULT_REQUESTS_PER_SECOND, "startup-only", "guarded", "Per-client request budget", RateLimiter.PROP_REQUESTS_PER_SECOND));
+        schema.add(schemaEntry("rateLimiterTuning.write_rps", "int", RateLimiter.DEFAULT_WRITE_RPS, "startup-only", "guarded", "Per-wallet write budget", RateLimiter.PROP_WRITE_RPS));
+        schema.add(schemaEntry("rateLimiterTuning.burst_size", "int", RateLimiter.DEFAULT_BURST_SIZE, "startup-only", "guarded", "Per-client burst size", RateLimiter.PROP_BURST_SIZE));
+        schema.add(schemaEntry("rateLimiterTuning.global_rps", "int", RateLimiter.DEFAULT_GLOBAL_RPS, "startup-only", "guarded", "Global request budget", RateLimiter.PROP_GLOBAL_RPS));
 
-        schema.add(schemaEntry(
-            "tlsTuning.enabled",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Enable TLS listener",
-            TlsConfiguration.PROP_TLS_ENABLED));
-        schema.add(schemaEntry(
-            "tlsTuning.keystore_type",
-            "string",
-            "PKCS12",
-            "startup-only",
-            "guarded",
-            "TLS keystore format",
-            TlsConfiguration.PROP_KEYSTORE_TYPE));
-        schema.add(schemaEntry(
-            "tlsTuning.keystore_path_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether TLS keystore path is configured",
-            TlsConfiguration.PROP_KEYSTORE_PATH));
-        schema.add(schemaEntry(
-            "tlsTuning.truststore_path_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether TLS truststore path is configured",
-            TlsConfiguration.PROP_TRUSTSTORE_PATH));
-        schema.add(schemaEntry(
-            "tlsTuning.client_auth",
-            "string",
-            "none",
-            "startup-only",
-            "expert-only",
-            "TLS client auth mode",
-            TlsConfiguration.PROP_CLIENT_AUTH));
-        schema.add(schemaEntry(
-            "tlsTuning.protocols",
-            "string",
-            "TLSv1.2,TLSv1.3",
-            "startup-only",
-            "guarded",
-            "Allowed TLS protocol list",
-            TlsConfiguration.PROP_PROTOCOLS));
-        schema.add(schemaEntry(
-            "tlsTuning.ciphers_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether explicit cipher suites are configured",
-            TlsConfiguration.PROP_CIPHERS));
+        schema.add(schemaEntry("tlsTuning.enabled", "boolean", false, "startup-only", "expert-only", "Enable TLS listener", TlsConfiguration.PROP_TLS_ENABLED));
+        schema.add(schemaEntry("tlsTuning.keystore_type", "string", TlsConfiguration.DEFAULT_KEYSTORE_TYPE, "startup-only", "guarded", "TLS keystore format", TlsConfiguration.PROP_KEYSTORE_TYPE));
+        schema.add(schemaEntry("tlsTuning.keystore_path_configured", "boolean", false, "startup-only", "expert-only", "Whether TLS keystore path is configured", TlsConfiguration.PROP_KEYSTORE_PATH));
+        schema.add(schemaEntry("tlsTuning.truststore_path_configured", "boolean", false, "startup-only", "expert-only", "Whether TLS truststore path is configured", TlsConfiguration.PROP_TRUSTSTORE_PATH));
+        schema.add(schemaEntry("tlsTuning.client_auth", "string", TlsConfiguration.DEFAULT_CLIENT_AUTH, "startup-only", "expert-only", "TLS client auth mode", TlsConfiguration.PROP_CLIENT_AUTH));
+        schema.add(schemaEntry("tlsTuning.protocols", "string", TlsConfiguration.DEFAULT_PROTOCOLS, "startup-only", "guarded", "Allowed TLS protocol list", TlsConfiguration.PROP_PROTOCOLS));
+        schema.add(schemaEntry("tlsTuning.ciphers_configured", "boolean", false, "startup-only", "expert-only", "Whether explicit cipher suites are configured", TlsConfiguration.PROP_CIPHERS));
 
-        schema.add(schemaEntry(
-            "tokenAuthTuning.auth_token_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether API auth token is configured",
-            AuthTokenValidator.TOKEN_PROPERTY_NAME + "|" + AuthTokenValidator.TOKEN_ENV_VAR_NAME));
+        schema.add(schemaEntry("tokenAuthTuning.auth_token_configured", "boolean", false, "startup-only", "expert-only", "Whether API auth token is configured", AuthTokenValidator.TOKEN_PROPERTY_NAME + "|" + AuthTokenValidator.TOKEN_ENV_VAR_NAME));
 
-        schema.add(schemaEntry(
-            "fileStoreFlushTuning.flush_interval_ms",
-            "long",
-            250L,
-            "startup-only",
-            "guarded",
-            "FileStore async flush interval",
-            "oak.filestore.flush.ms"));
-        schema.add(schemaEntry(
-            "fileStoreFlushTuning.flush_batch",
-            "int",
-            100,
-            "startup-only",
-            "guarded",
-            "FileStore async flush batch threshold",
-            "oak.filestore.flush.batch"));
+        schema.add(schemaEntry("fileStoreFlushTuning.flush_interval_ms", "long", FileStoreFlushService.DEFAULT_FLUSH_INTERVAL_MS, "startup-only", "guarded", "FileStore async flush interval", "oak.filestore.flush.ms"));
+        schema.add(schemaEntry("fileStoreFlushTuning.flush_batch", "int", FileStoreFlushService.DEFAULT_FLUSH_BATCH, "startup-only", "guarded", "FileStore async flush batch threshold", "oak.filestore.flush.batch"));
 
-        schema.add(schemaEntry(
-            "blockchainTuning.mode",
-            "string",
-            "mock",
-            "startup-only",
-            "guarded",
-            "Blockchain mode override",
-            "oak.blockchain.mode"));
-        schema.add(schemaEntry(
-            "blockchainTuning.contract_address",
-            "string",
-            "",
-            "startup-only",
-            "guarded",
-            "Blockchain contract address override",
-            "oak.blockchain.contractAddress"));
-        schema.add(schemaEntry(
-            "blockchainTuning.rpc_url_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether RPC URL is configured via OSGi/env/system",
-            "oak.blockchain.rpcUrl"));
-        schema.add(schemaEntry(
-            "blockchainTuning.gas_price_gwei",
-            "long",
-            3L,
-            "runtime-readable",
-            "guarded",
-            "Gas price assumption for write estimate math",
-            "oak.blockchain.gasPriceGwei"));
-        schema.add(schemaEntry(
-            "blockchainTuning.gas_write_standard",
-            "long",
-            74534L,
-            "runtime-readable",
-            "guarded",
-            "Measured gas units for STANDARD write path",
-            "oak.blockchain.gas.write.standard"));
-        schema.add(schemaEntry(
-            "blockchainTuning.gas_write_express",
-            "long",
-            74534L,
-            "runtime-readable",
-            "guarded",
-            "Measured gas units for EXPRESS write path",
-            "oak.blockchain.gas.write.express"));
-        schema.add(schemaEntry(
-            "blockchainTuning.gas_write_priority",
-            "long",
-            74534L,
-            "runtime-readable",
-            "guarded",
-            "Measured gas units for PRIORITY write path",
-            "oak.blockchain.gas.write.priority"));
+        schema.add(schemaEntry("blockchainTuning.mode", "string", "mock", "startup-only", "guarded", "Blockchain mode override", "oak.blockchain.mode"));
+        schema.add(schemaEntry("blockchainTuning.contract_address", "string", "", "startup-only", "guarded", "Blockchain contract address override", "oak.blockchain.contractAddress"));
+        schema.add(schemaEntry("blockchainTuning.rpc_url_configured", "boolean", false, "startup-only", "guarded", "Whether RPC URL is configured via OSGi/env/system", "oak.blockchain.rpcUrl"));
+        schema.add(schemaEntry("blockchainTuning.gas_price_gwei", "long", BlockchainConfig.DEFAULT_GAS_PRICE_GWEI, "runtime-readable", "guarded", "Gas price assumption for write estimate math", "oak.blockchain.gasPriceGwei"));
+        schema.add(schemaEntry("blockchainTuning.gas_write_standard", "long", BlockchainConfig.DEFAULT_GAS_WRITE_STANDARD, "runtime-readable", "guarded", "Measured gas units for STANDARD write path", "oak.blockchain.gas.write.standard"));
+        schema.add(schemaEntry("blockchainTuning.gas_write_express", "long", BlockchainConfig.DEFAULT_GAS_WRITE_EXPRESS, "runtime-readable", "guarded", "Measured gas units for EXPRESS write path", "oak.blockchain.gas.write.express"));
+        schema.add(schemaEntry("blockchainTuning.gas_write_priority", "long", BlockchainConfig.DEFAULT_GAS_WRITE_PRIORITY, "runtime-readable", "guarded", "Measured gas units for PRIORITY write path", "oak.blockchain.gas.write.priority"));
         // Derived estimates; defaults are the tier base price plus 3 gwei x 74,534 gas.
-        schema.add(schemaEntry(
-            "blockchainTuning.estimated_total_wei_standard",
-            "string",
-            "1223602000000000",
-            "derived",
-            "safe",
-            "Estimated STANDARD write cost in wei (derived from gas settings)",
-            "oak.blockchain.gas.write.standard"));
-        schema.add(schemaEntry(
-            "blockchainTuning.estimated_total_wei_express",
-            "string",
-            "2223602000000000",
-            "derived",
-            "safe",
-            "Estimated EXPRESS write cost in wei (derived from gas settings)",
-            "oak.blockchain.gas.write.express"));
-        schema.add(schemaEntry(
-            "blockchainTuning.estimated_total_wei_priority",
-            "string",
-            "10223602000000000",
-            "derived",
-            "safe",
-            "Estimated PRIORITY write cost in wei (derived from gas settings)",
-            "oak.blockchain.gas.write.priority"));
+        schema.add(schemaEntry("blockchainTuning.estimated_total_wei_standard", "string", "1223602000000000", "derived", "safe", "Estimated STANDARD write cost in wei (derived from gas settings)", "oak.blockchain.gas.write.standard"));
+        schema.add(schemaEntry("blockchainTuning.estimated_total_wei_express", "string", "2223602000000000", "derived", "safe", "Estimated EXPRESS write cost in wei (derived from gas settings)", "oak.blockchain.gas.write.express"));
+        schema.add(schemaEntry("blockchainTuning.estimated_total_wei_priority", "string", "10223602000000000", "derived", "safe", "Estimated PRIORITY write cost in wei (derived from gas settings)", "oak.blockchain.gas.write.priority"));
 
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.consensus_enabled",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Enable consensus startup",
-            "consensus.enabled"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.consensus_mode",
-            "string",
-            "aeron",
-            "startup-only",
-            "guarded",
-            "Consensus mode selector",
-            "consensus.mode"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.wallet_keystore_path_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether node wallet keystore path is configured",
-            "wallet.keystore.path"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.blobstore_type",
-            "string",
-            "",
-            "startup-only",
-            "guarded",
-            "BlobStore backend type",
-            "blobstore.type|BLOBSTORE_TYPE"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.ipfs_api_endpoint_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether IPFS API endpoint is configured",
-            "ipfs.api.endpoint|IPFS_API_ENDPOINT"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.ipfs_api_authorization_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether an Authorization header is configured for the IPFS API (the value is never reported)",
-            "ipfs.api.authorization|IPFS_API_AUTHORIZATION"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.ipfs_cluster_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether binary writes are replicated through IPFS Cluster before they are acknowledged",
-            "ipfs.cluster.endpoint|IPFS_CLUSTER_ENDPOINT"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.ipfs_encryption_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether binaries are encrypted before they reach IPFS (the keys are never reported)",
-            "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.blob_url_signing_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether signed, expiring blob download URLs can be issued and verified (the keys are never reported)",
-            "oak.blob.url.keys|OAK_BLOB_URL_KEYS"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.ipfs_network_policy",
-            "string",
-            "warn",
-            "startup-only",
-            "guarded",
-            "How startup treats an IPFS node that may expose content outside a private network: off, warn or private",
-            "ipfs.network.policy|IPFS_NETWORK_POLICY"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.http_port",
-            "int",
-            0,
-            "startup-only",
-            "safe",
-            "Optional plain HTTP port when TLS is enabled",
-            "http.port"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.aeron_dir_name_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether a custom Aeron directory is configured",
-            "aeron.dir.name"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.aeron_cluster_hostnames_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Whether explicit Aeron hostnames are configured",
-            "aeron.cluster.hostnames"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.proposal_persistence_dir_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether an explicit proposal persistence directory is configured",
-            "oak.proposal.persistence.dir|OAK_PROPOSAL_PERSISTENCE_DIR"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.consensus_safety_enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "expert-only",
-            "Genesis v2 consensus safety; the Aeron service refuses to start when false",
-            "oak.consensus.safety.enabled"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.http_bind_host",
-            "string",
-            "",
-            "startup-only",
-            "guarded",
-            "HTTP bind address (empty listens on all interfaces)",
-            "http.bind.host"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.segment_backend",
-            "string",
-            "local",
-            "startup-only",
-            "guarded",
-            "Segment store backend (local, azure, aws)",
-            "oak.segment.backend|OAK_SEGMENT_BACKEND"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.blob_backend",
-            "string",
-            "ipfs",
-            "startup-only",
-            "guarded",
-            "Blob store backend (ipfs, azure, aws); legacy blobstore.type is the fallback",
-            "oak.blob.backend|OAK_BLOB_BACKEND"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.sharding_enabled",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Path-prefix sharding across clusters",
-            "oak.sharding.enabled"));
-        schema.add(schemaEntry(
-            "nodeRuntimeTuning.wallet_passphrase_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "guarded",
-            "Whether the validator wallet key is encrypted with a passphrase",
-            "validator.wallet.passphrase|VALIDATOR_WALLET_PASSPHRASE"));
+        schema.add(schemaEntry("nodeRuntimeTuning.consensus_enabled", "boolean", false, "startup-only", "guarded", "Enable consensus startup", "consensus.enabled"));
+        schema.add(schemaEntry("nodeRuntimeTuning.consensus_mode", "string", "aeron", "startup-only", "guarded", "Consensus mode selector", "consensus.mode"));
+        schema.add(schemaEntry("nodeRuntimeTuning.wallet_keystore_path_configured", "boolean", false, "startup-only", "guarded", "Whether node wallet keystore path is configured", "wallet.keystore.path"));
+        schema.add(schemaEntry("nodeRuntimeTuning.blobstore_type", "string", "", "startup-only", "guarded", "BlobStore backend type", "blobstore.type|BLOBSTORE_TYPE"));
+        schema.add(schemaEntry("nodeRuntimeTuning.ipfs_api_endpoint_configured", "boolean", false, "startup-only", "guarded", "Whether IPFS API endpoint is configured", "ipfs.api.endpoint|IPFS_API_ENDPOINT"));
+        schema.add(schemaEntry("nodeRuntimeTuning.ipfs_api_authorization_configured", "boolean", false, "startup-only", "guarded", "Whether an Authorization header is configured for the IPFS API (the value is never reported)", "ipfs.api.authorization|IPFS_API_AUTHORIZATION"));
+        schema.add(schemaEntry("nodeRuntimeTuning.ipfs_cluster_configured", "boolean", false, "startup-only", "guarded", "Whether binary writes are replicated through IPFS Cluster before they are acknowledged", "ipfs.cluster.endpoint|IPFS_CLUSTER_ENDPOINT"));
+        schema.add(schemaEntry("nodeRuntimeTuning.ipfs_encryption_configured", "boolean", false, "startup-only", "guarded", "Whether binaries are encrypted before they reach IPFS (the keys are never reported)", "ipfs.encryption.keys|IPFS_ENCRYPTION_KEYS"));
+        schema.add(schemaEntry("nodeRuntimeTuning.blob_url_signing_configured", "boolean", false, "startup-only", "guarded", "Whether signed, expiring blob download URLs can be issued and verified (the keys are never reported)", "oak.blob.url.keys|OAK_BLOB_URL_KEYS"));
+        schema.add(schemaEntry("nodeRuntimeTuning.ipfs_network_policy", "string", "warn", "startup-only", "guarded", "How startup treats an IPFS node that may expose content outside a private network: off, warn or private", "ipfs.network.policy|IPFS_NETWORK_POLICY"));
+        schema.add(schemaEntry("nodeRuntimeTuning.http_port", "int", 0, "startup-only", "safe", "Optional plain HTTP port when TLS is enabled", "http.port"));
+        schema.add(schemaEntry("nodeRuntimeTuning.aeron_dir_name_configured", "boolean", false, "startup-only", "expert-only", "Whether a custom Aeron directory is configured", "aeron.dir.name"));
+        schema.add(schemaEntry("nodeRuntimeTuning.aeron_cluster_hostnames_configured", "boolean", false, "startup-only", "expert-only", "Whether explicit Aeron hostnames are configured", "aeron.cluster.hostnames"));
+        schema.add(schemaEntry("nodeRuntimeTuning.proposal_persistence_dir_configured", "boolean", false, "startup-only", "guarded", "Whether an explicit proposal persistence directory is configured", "oak.proposal.persistence.dir|OAK_PROPOSAL_PERSISTENCE_DIR"));
+        schema.add(schemaEntry("nodeRuntimeTuning.consensus_safety_enabled", "boolean", true, "startup-only", "expert-only", "Genesis v2 consensus safety; the Aeron service refuses to start when false", "oak.consensus.safety.enabled"));
+        schema.add(schemaEntry("nodeRuntimeTuning.http_bind_host", "string", "", "startup-only", "guarded", "HTTP bind address (empty listens on all interfaces)", "http.bind.host"));
+        schema.add(schemaEntry("nodeRuntimeTuning.segment_backend", "string", "local", "startup-only", "guarded", "Segment store backend (local, azure, aws)", "oak.segment.backend|OAK_SEGMENT_BACKEND"));
+        schema.add(schemaEntry("nodeRuntimeTuning.blob_backend", "string", "ipfs", "startup-only", "guarded", "Blob store backend (ipfs, azure, aws); legacy blobstore.type is the fallback", "oak.blob.backend|OAK_BLOB_BACKEND"));
+        schema.add(schemaEntry("nodeRuntimeTuning.sharding_enabled", "boolean", false, "startup-only", "guarded", "Path-prefix sharding across clusters", "oak.sharding.enabled"));
+        schema.add(schemaEntry("nodeRuntimeTuning.wallet_passphrase_configured", "boolean", false, "startup-only", "guarded", "Whether the validator wallet key is encrypted with a passphrase", "validator.wallet.passphrase|VALIDATOR_WALLET_PASSPHRASE"));
 
-        schema.add(schemaEntry(
-            "runtimeUiTuning.browser_ui_enabled",
-            "boolean",
-            true,
-            "startup-only",
-            "safe",
-            "Enable in-process browser UI routes",
-            "oak.http.browser.ui.enabled"));
-        schema.add(schemaEntry(
-            "runtimeUiTuning.external_dashboard_url_configured",
-            "boolean",
-            false,
-            "startup-only",
-            "safe",
-            "Whether external dashboard URL is configured",
-            "oak.dashboard.external.url"));
+        schema.add(schemaEntry("runtimeUiTuning.browser_ui_enabled", "boolean", true, "startup-only", "safe", "Enable in-process browser UI routes", "oak.http.browser.ui.enabled"));
+        schema.add(schemaEntry("runtimeUiTuning.external_dashboard_url_configured", "boolean", false, "startup-only", "safe", "Whether external dashboard URL is configured", "oak.dashboard.external.url"));
         return schema;
     }
 
     private Map<String, Object> buildTlsTuning() {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("enabled", readBoolean(TlsConfiguration.PROP_TLS_ENABLED, false));
-        values.put("keystore_type", readString(TlsConfiguration.PROP_KEYSTORE_TYPE, "PKCS12"));
+        values.put("keystore_type", readString(TlsConfiguration.PROP_KEYSTORE_TYPE, TlsConfiguration.DEFAULT_KEYSTORE_TYPE));
         values.put("keystore_path_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_KEYSTORE_PATH));
         values.put("truststore_path_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_TRUSTSTORE_PATH));
-        values.put("client_auth", readString(TlsConfiguration.PROP_CLIENT_AUTH, "none"));
-        values.put("protocols", readString(TlsConfiguration.PROP_PROTOCOLS, "TLSv1.2,TLSv1.3"));
+        values.put("client_auth", readString(TlsConfiguration.PROP_CLIENT_AUTH, TlsConfiguration.DEFAULT_CLIENT_AUTH));
+        values.put("protocols", readString(TlsConfiguration.PROP_PROTOCOLS, TlsConfiguration.DEFAULT_PROTOCOLS));
         values.put("ciphers_configured", RuntimeConfigValueResolver.hasConfiguredValue(TlsConfiguration.PROP_CIPHERS));
         return values;
     }
@@ -1002,8 +350,8 @@ public class OsgiConfigApiHandler {
 
     private Map<String, Object> buildFileStoreFlushTuning() {
         Map<String, Object> values = new LinkedHashMap<>();
-        values.put("flush_interval_ms", readLong("oak.filestore.flush.ms", 250L));
-        values.put("flush_batch", readInt("oak.filestore.flush.batch", 100));
+        values.put("flush_interval_ms", readLong("oak.filestore.flush.ms", FileStoreFlushService.DEFAULT_FLUSH_INTERVAL_MS));
+        values.put("flush_batch", readInt("oak.filestore.flush.batch", FileStoreFlushService.DEFAULT_FLUSH_BATCH));
         return values;
     }
 

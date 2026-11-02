@@ -186,10 +186,10 @@ public class BlockchainConfig {
     private static final BigInteger PRIORITY_PRICE_WEI = new BigInteger("10000000000000000");  // 0.01 ETH
 
     // Measured Sepolia gas baselines (ValidatorPaymentV3_2 payForProposal path)
-    private static final long DEFAULT_GAS_PRICE_GWEI = 3L;
-    private static final long DEFAULT_GAS_WRITE_STANDARD = 74_534L;
-    private static final long DEFAULT_GAS_WRITE_EXPRESS = 74_534L;
-    private static final long DEFAULT_GAS_WRITE_PRIORITY = 74_534L;
+    public static final long DEFAULT_GAS_PRICE_GWEI = 3L;
+    public static final long DEFAULT_GAS_WRITE_STANDARD = 74_534L;
+    public static final long DEFAULT_GAS_WRITE_EXPRESS = 74_534L;
+    public static final long DEFAULT_GAS_WRITE_PRIORITY = 74_534L;
 
     // Singleton instance
     private static volatile BlockchainConfig instance;

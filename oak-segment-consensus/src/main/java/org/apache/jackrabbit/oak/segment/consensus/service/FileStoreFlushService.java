@@ -42,8 +42,8 @@ public final class FileStoreFlushService implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(FileStoreFlushService.class);
 
-    private static final long DEFAULT_FLUSH_INTERVAL_MS = 250L;
-    private static final int DEFAULT_FLUSH_BATCH = 100;
+    public static final long DEFAULT_FLUSH_INTERVAL_MS = 250L;
+    public static final int DEFAULT_FLUSH_BATCH = 100;
 
     private final FileStore fileStore;
     private final long flushIntervalMs;
