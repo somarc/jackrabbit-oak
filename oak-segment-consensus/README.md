@@ -196,6 +196,7 @@ the environment variable wins. Settings listed without an environment variable a
 | `oak.proposal.confirmation.required` | | `0` (mode default) | Payment confirmations, counted against the latest block. `0` uses the mode default: `local` 1, `sepolia` 3; `mainnet` counts only blocks at or below the `finalized` tag. |
 | `oak.consensus.safety.enabled` | | `true` | `false` stops the validator from starting; genesis v2 requires the safety invariants on every member. |
 | `aeron.rcv.initial.window.length`, `aeron.socket.so_rcvbuf` | | Aeron defaults | If you set `so_rcvbuf`, make it at least the window length, or Aeron refuses to start. |
+| `oak.cluster.media.driver.timeout.ms` | | `60000` | Media driver liveness timeout (`driverTimeoutMs`). It also bounds how long a restart waits for a killed driver's directory; see [Restarting after a crash](#restarting-after-a-crash). |
 
 A running validator reports most of its tunables, with defaults, current values
 and risk notes, at `GET /v1/config/osgi/schema` and `GET /v1/config/osgi`,
@@ -204,6 +205,20 @@ above; the Aeron directory is not included. `/console/configMgr` shows the same
 values read-only, next to the declared OSGi properties. The validator runs without
 OSGi Configuration Admin, so the OSGi declarations document the contract and do not
 set values.
+
+### Restarting after a crash
+
+A validator that was killed (SIGKILL, OOM, power loss) leaves its Aeron media
+driver directory (`cnc.dat`) and its archive and cluster mark files
+(`archive-mark.dat`, `cluster-mark*.dat`) behind. Each still looks owned until its
+last heartbeat is older than the component's liveness timeout: `driverTimeoutMs`
+(default 60 s) for the driver directory, and 10 s for the mark files, which Aeron
+fixes. A validator restarted within that window waits instead of exiting. It logs one
+WARN naming the file and the bound, retries the launch every second for at most the
+timeout plus 5 s, and logs `started after waiting N ms` once the old heartbeat has
+gone stale. Nothing is deleted. If the file is still active after the bound, another
+process owns it: startup is refused with the same message as before, plus how long it
+waited, and the process exits. Stop that process instead of deleting the file.
 
 ## Security
 
