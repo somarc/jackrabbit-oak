@@ -126,14 +126,13 @@ public class AeronIngressWritePayloadBuilderTest {
     }
 
     @Test
-    public void writeBatchIncludesIntentBlobAndIpfsFields() {
+    public void writeBatchIncludesBlobAndIpfsFields() {
         QueuedProposal first = proposal("proposal-1");
         first.setWalletAddress("0xaaa");
         first.setPath("/content/a");
         first.setContentType(null);
         first.setMessage("hello");
         first.setSignature("sig-a");
-        first.setIntentToken("intent-1");
 
         QueuedProposal second = new QueuedProposal("proposal-2", "0xtx", 1L, 2L, ProposalState.PENDING) {
             @Override
@@ -158,7 +157,6 @@ public class AeronIngressWritePayloadBuilderTest {
 
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, encoded.templateId);
         assertTrue(encoded.json.contains("\"proposalId\":\"proposal-1\""));
-        assertTrue(encoded.json.contains("\"intentToken\":\"intent-1\""));
         assertTrue(encoded.json.contains("\"contentType\":\"page\""));
         assertTrue(encoded.json.contains("\"proposalId\":\"proposal-2\""));
         assertTrue(encoded.json.contains("\"transactionId\":\"tx-2\""));

@@ -547,8 +547,7 @@ public class WriteProposalHandlerTest {
         ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
         context.proposalQueueManager = queueManager;
         when(queueManager.queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
@@ -744,8 +743,7 @@ public class WriteProposalHandlerTest {
         context.cidMappingService = mock(CidMappingService.class);
         when(context.cidMappingService.getOakBlobId("QmKnownCid")).thenReturn(Optional.of("blob-1"));
         when(queueManager.queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,
@@ -818,7 +816,7 @@ public class WriteProposalHandlerTest {
 
         ArgumentCaptor<String> blobId = ArgumentCaptor.forClass(String.class);
         verify(queueManager).queueProposal(anyString(), anyString(), anyString(), anyString(), anyString(),
-            anyString(), anyString(), nullable(String.class), blobId.capture(), anyString(), eq(expectedCid));
+            anyString(), anyString(), blobId.capture(), anyString(), eq(expectedCid));
         return blobId.getValue();
     }
 
@@ -836,8 +834,7 @@ public class WriteProposalHandlerTest {
 
         ArgumentCaptor<String> paths = ArgumentCaptor.forClass(String.class);
         verify(queueManager, times(2)).queueProposal(
-            anyString(), anyString(), anyString(), paths.capture(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            anyString(), anyString(), anyString(), paths.capture(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class)
         );
         String first = paths.getAllValues().get(0);
         String second = paths.getAllValues().get(1);
@@ -872,7 +869,7 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_ACCEPTED);
         ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
         verify(queueManager).queueProposal(anyString(), anyString(), eq(VALID_WALLET), path.capture(), anyString(),
-            anyString(), anyString(), nullable(String.class), nullable(String.class), anyString(),
+            anyString(), anyString(), nullable(String.class), anyString(),
             nullable(String.class));
         assertTrue(path.getValue(), path.getValue().startsWith(
             WalletPathUtil.getContentPath(FederationFixtures.NAMESPACE_A2, "acme") + "/page-"));
@@ -897,7 +894,7 @@ public class WriteProposalHandlerTest {
             assertTrue(body.toString(), body.toString().contains(attempt[1]));
         }
         verify(context.proposalQueueManager, times(0)).queueProposal(anyString(), anyString(), anyString(),
-            anyString(), anyString(), anyString(), anyString(), nullable(String.class), nullable(String.class),
+            anyString(), anyString(), anyString(), anyString(), nullable(String.class),
             anyString(), nullable(String.class));
     }
 
@@ -932,7 +929,7 @@ public class WriteProposalHandlerTest {
         assertTrue(json, json.contains("\"appliedAt\":" + AppliedProposals.APPLIED_AT));
         assertEquals(1L, context.apiRejectedRequests.get());
         verify(queueManager, never()).queueProposal(anyString(), anyString(), anyString(), anyString(), anyString(),
-            anyString(), anyString(), nullable(String.class), nullable(String.class), anyString(),
+            anyString(), anyString(), nullable(String.class), anyString(),
             nullable(String.class));
     }
 
@@ -991,7 +988,6 @@ public class WriteProposalHandlerTest {
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class),
-            org.mockito.ArgumentMatchers.nullable(String.class),
             anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
         )).thenThrow(new java.util.concurrent.RejectedExecutionException("queue_overloaded"));
@@ -1024,7 +1020,6 @@ public class WriteProposalHandlerTest {
         context.blobStore = blobStore;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.nullable(String.class),
             org.mockito.ArgumentMatchers.nullable(String.class),
             anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
@@ -1063,7 +1058,6 @@ public class WriteProposalHandlerTest {
         context.blobStore = blobStore;
         when(queueManager.queueProposal(
             anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.nullable(String.class),
             org.mockito.ArgumentMatchers.nullable(String.class),
             anyString(),
             org.mockito.ArgumentMatchers.nullable(String.class)
@@ -1117,8 +1111,7 @@ public class WriteProposalHandlerTest {
         new WriteProposalHandler(context).handleProposeWrite(request, responseWithBody(new StringWriter()));
 
         verify(queueManager).queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), eq("blob-1#3"), anyString(), eq("bafyIngested"));
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), eq("blob-1#3"), anyString(), eq("bafyIngested"));
         verify(ipfs, times(1)).getCID("blob-1#3");
     }
 
@@ -1170,8 +1163,7 @@ public class WriteProposalHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         verify(queueManager, never()).queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class));
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class));
     }
 
     @Test
@@ -1200,8 +1192,7 @@ public class WriteProposalHandlerTest {
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
         assertTrue(body.toString().contains("binary_upload_failed"));
         verify(queueManager, never()).queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class));
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class));
     }
 
     @Test
@@ -1218,8 +1209,7 @@ public class WriteProposalHandlerTest {
         context.registeredClients.put("client-1", new ClientRegistration("client-1", "http://author", VALID_WALLET.toLowerCase()));
         when(blobStore.writeBlob(any(), any(BlobOptions.class))).thenReturn("blob-1");
         when(queueManager.queueProposal(
-            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            nullable(String.class), nullable(String.class), anyString(), nullable(String.class)
+            anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), nullable(String.class), anyString(), nullable(String.class)
         )).thenReturn(new QueuedProposal(
             "proposal-1",
             VALID_TX_HASH,

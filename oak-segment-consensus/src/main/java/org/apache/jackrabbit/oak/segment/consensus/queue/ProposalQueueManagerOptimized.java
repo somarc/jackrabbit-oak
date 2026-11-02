@@ -1164,8 +1164,6 @@ public class ProposalQueueManagerOptimized {
     
     /**
      * Queue a write proposal for verification and adaptive release (standard tier).
-     *
-     * @param intentToken intent token for lazy binary upload (optional, ADR 020)
      */
     public QueuedProposal queueProposal(
             String proposalId,
@@ -1175,12 +1173,11 @@ public class ProposalQueueManagerOptimized {
             String contentType,
             String message,
             String signature,
-            String intentToken,
             String blobId,
             String mimeType,
             String ipfsCid) {
         return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
-            ValidatorEarningsTracker.PaymentTier.STANDARD, intentToken, blobId, mimeType, ipfsCid);
+            ValidatorEarningsTracker.PaymentTier.STANDARD, blobId, mimeType, ipfsCid);
     }
 
     public QueuedProposal queueProposal(
@@ -1191,10 +1188,9 @@ public class ProposalQueueManagerOptimized {
             String contentType,
             String message,
             String signature,
-            ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken) {
+            ValidatorEarningsTracker.PaymentTier tier) {
         return queueProposal(proposalId, ethereumTxHash, walletAddress, path, contentType, message, signature,
-            tier, intentToken, null, null, null);
+            tier, null, null, null);
     }
 
     /**
@@ -1210,7 +1206,6 @@ public class ProposalQueueManagerOptimized {
             String message,
             String signature,
             ValidatorEarningsTracker.PaymentTier tier,
-            String intentToken,
             String blobId,
             String mimeType,
             String ipfsCid) {
@@ -1220,7 +1215,6 @@ public class ProposalQueueManagerOptimized {
         long pendingCount = getPendingCount();
         QueuedProposal proposal = newPendingProposal(proposalId, ethereumTxHash, walletAddress, path, signature, epoch, tier);
         proposal.setContentType(contentType);
-        proposal.setIntentToken(intentToken);
         proposal.setBlobId(blobId);
         proposal.setMimeType(mimeType);
         proposal.setIpfsCid(ipfsCid);
@@ -2167,10 +2161,6 @@ public class ProposalQueueManagerOptimized {
     private static boolean requiresValidatorHostedBinaryCapability(QueuedProposal proposal) {
         if (proposal == null || proposal.getType() != QueuedProposal.ProposalType.WRITE) {
             return false;
-        }
-        String intentToken = proposal.getIntentToken();
-        if (intentToken != null && !intentToken.isEmpty()) {
-            return true;
         }
         String blobId = proposal.getBlobId();
         return blobId != null && !blobId.isEmpty();

@@ -104,7 +104,7 @@ public class AeronConsensusEngine implements ClusteredService {
     // Callback interface for applying replicated writes and deletes
     public interface WriteApplicationCallback {
         default void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                          String signature, String intentToken, String blobId, String mimeType,
+                                          String signature, String blobId, String mimeType,
                                           String ipfsCid, MutationAuditMetadata auditMetadata) {
             throw new UnsupportedOperationException("Write application callback must implement applyReplicatedWrite");
         }
@@ -252,13 +252,13 @@ public class AeronConsensusEngine implements ClusteredService {
             new MessageDispatcher.WriteCallback() {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType,
-                                     String message, String signature, String intentToken,
+                                     String message, String signature,
                                      String blobId, String mimeType, String ipfsCid,
                                      MutationAuditMetadata auditMetadata) {
                     // Delegate to existing write application logic
                     if (writeCallback != null) {
                         writeCallback.applyReplicatedWrite(walletAddress, path, contentType, 
-                                                          message, signature, intentToken, 
+                                                          message, signature,
                                                           blobId, mimeType, ipfsCid, auditMetadata);
                         backpressureManager.incrementAcknowledged();
                     } else {

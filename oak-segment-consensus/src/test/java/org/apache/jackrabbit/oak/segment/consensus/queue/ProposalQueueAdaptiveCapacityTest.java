@@ -167,9 +167,7 @@ public class ProposalQueueAdaptiveCapacityTest {
                     "page",
                     "payload-" + i,
                     "0xsig...",
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                    null
-                );
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,

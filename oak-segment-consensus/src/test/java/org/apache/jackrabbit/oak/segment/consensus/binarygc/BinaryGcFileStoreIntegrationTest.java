@@ -188,7 +188,7 @@ public class BinaryGcFileStoreIntegrationTest {
 
     private static void write(WriteApplicationService writes, String name, String blobId, String cid,
                               long position, long time) {
-        writes.applyWriteWithAuditMetadata(WALLET, CONTENT + name, "file", "m", "0xsig", null, blobId,
+        writes.applyWriteWithAuditMetadata(WALLET, CONTENT + name, "file", "m", "0xsig", blobId,
             "application/octet-stream", cid, MutationAuditMetadata.write(null, null, "p-" + name, null, null, null,
                 null).withAppliedAt(time).withAppliedLogPosition(new AppliedLogPosition(position, 0, 1)));
     }

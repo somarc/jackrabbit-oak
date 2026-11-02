@@ -97,7 +97,6 @@ public class WriteProposalHandler {
             String contentType = null;
             String ethereumTxHash = null;
             String clientProposalId = null;
-            String intentToken = null;
             String organization = null;  // ADR 037: Organization-scoped content paths
             String rawNamespace = null;   // Enterprise namespace a listed writer writes into (federated only)
             String ipfsCid = null;        // ADR 016: Client-side IPFS upload - CID from client
@@ -137,7 +136,6 @@ public class WriteProposalHandler {
                             case "contentType": contentType = value; break;
                             case "ethereumTxHash": ethereumTxHash = value; break;
                             case "proposalId": clientProposalId = value; break;
-                            case "intentToken": intentToken = value; break;
                             case "organization": organization = value; break;  // ADR 037
                             case "namespace": rawNamespace = value; break;
                             case "ipfsCid": ipfsCid = value; break;  // ADR 016: Client-side IPFS CID
@@ -155,7 +153,6 @@ public class WriteProposalHandler {
                 contentType = request.getParameter("contentType");
                 ethereumTxHash = request.getParameter("ethereumTxHash");
                 clientProposalId = request.getParameter("proposalId");
-                intentToken = request.getParameter("intentToken");
                 organization = request.getParameter("organization");  // ADR 037
                 rawNamespace = request.getParameter("namespace");
                 ipfsCid = request.getParameter("ipfsCid");  // ADR 016: Client-side IPFS CID
@@ -287,7 +284,7 @@ public class WriteProposalHandler {
 
             // ============================================================
             // IPFS SUPPLY CHAIN POLICY ENFORCEMENT
-            // - supply-chain clients: validator-hosted IPFS only (intent/file)
+            // - supply-chain clients: validator-hosted IPFS only (file)
             // - enterprise clients: may use ipfsCid, but only if CID is known to validator
             // ============================================================
             if (ipfsCid != null) {
@@ -296,19 +293,11 @@ public class WriteProposalHandler {
                     ipfsCid = null;
                 }
             }
-            if (intentToken != null) {
-                intentToken = intentToken.trim();
-                if (intentToken.isEmpty()) {
-                    intentToken = null;
-                }
-            }
 
             boolean hasClientIpfsCid = ipfsCid != null;
             String clientCidBlobId = null;
             long binaryLength = binaryPart != null ? binaryPart.getSize() : binaryBytes != null ? binaryBytes.length : 0;
             boolean hasBinaryPayload = binaryLength > 0;
-            boolean hasIntentToken = intentToken != null;
-            boolean usesValidatorHostedBinary = hasBinaryPayload || hasIntentToken;
 
             if (hasClientIpfsCid && hasBinaryPayload) {
                 rejectIpfsPolicy(response, context.apiIpfsPolicyRejectAmbiguousSource, "ambiguous_source",
@@ -316,18 +305,12 @@ public class WriteProposalHandler {
                     "Ambiguous binary source: provide either ipfsCid or validator-hosted binary payload, not both.");
                 return;
             }
-            if (hasClientIpfsCid && hasIntentToken) {
-                rejectIpfsPolicy(response, context.apiIpfsPolicyRejectAmbiguousSource, "ambiguous_source",
-                    HttpServletResponse.SC_BAD_REQUEST, null,
-                    "Ambiguous binary source: provide either ipfsCid or intentToken, not both.");
-                return;
-            }
             if (hasClientIpfsCid && !clientReg.isEnterpriseClient()) {
                 rejectIpfsPolicy(response, context.apiIpfsPolicyRejectNonEnterpriseCid, "non_enterprise_client",
                     HttpServletResponse.SC_FORBIDDEN,
                     "client_ipfs_cid_requires_enterprise_registration",
                     "Client-side ipfsCid is restricted to registered enterprise clients. " +
-                    "Use validator-hosted binary upload (intentToken or multipart/base64) for supply-chain clients.");
+                    "Use validator-hosted binary upload (multipart/base64) for supply-chain clients.");
                 return;
             }
             if (hasClientIpfsCid) {
@@ -532,8 +515,8 @@ public class WriteProposalHandler {
             }
 
             // Queue proposal (waiting for Ethereum confirmation)
-            log.debug("📥 Queuing proposal {} (tx: {}, intentToken: {}, blobId: {}), waiting for Ethereum confirmation",
-                proposalId, ethereumTxHash, intentToken != null ? intentToken : "none", blobId != null ? blobId : "none");
+            log.debug("📥 Queuing proposal {} (tx: {}, blobId: {}), waiting for Ethereum confirmation",
+                proposalId, ethereumTxHash, blobId != null ? blobId : "none");
 
             context.proposalQueueManager.queueProposal(
                 proposalId,
@@ -543,7 +526,6 @@ public class WriteProposalHandler {
                 contentType,
                 message,
                 signature, // Already validated - no fallback needed
-                intentToken,  // Pass intentToken for lazy binary upload (ADR 020)
                 blobId,
                 mimeType != null ? mimeType : "application/octet-stream",
                 ipfsCid

@@ -65,7 +65,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(wallet + "|" + path + "|" + audit.getProposalId());
             }
 
@@ -92,7 +92,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
-                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String signature, String blobId, String mimeType,
                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
                 captured.set(auditMetadata);
             }
@@ -130,7 +130,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 called.set(wallet);
             }
 
@@ -156,7 +156,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 called.set(wallet + "|" + path);
             }
 
@@ -187,7 +187,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(path);
             }
 
@@ -212,7 +212,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(wallet + "|" + path);
             }
 
@@ -243,7 +243,7 @@ public class MessageDispatcherTest {
         MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
@@ -260,7 +260,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
@@ -317,7 +317,7 @@ public class MessageDispatcherTest {
         MessageDispatcher withCallback = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message, String signature,
-                                   String intentToken, String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
+                                   String blobId, String mimeType, String ipfsCid, MutationAuditMetadata audit) {
             }
 
             @Override
@@ -365,8 +365,23 @@ public class MessageDispatcherTest {
 
         assertTrue(dispatchAt(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL,
             "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/after-gc\"}", 8192L));
-        Mockito.verify(writes).applyWrite(eq("0xabc"), eq("/oak-chain/after-gc"), any(), any(), any(), any(), any(),
+        Mockito.verify(writes).applyWrite(eq("0xabc"), eq("/oak-chain/after-gc"), any(), any(), any(), any(),
             any(), any(), any());
+    }
+
+    /** Log entries written before the ADR 020 intent token was dropped still apply; the field is ignored. */
+    @Test
+    public void writeEntriesCarryingALegacyIntentTokenStillApply() {
+        MessageDispatcher.WriteCallback writes = mock(MessageDispatcher.WriteCallback.class);
+        MessageDispatcher dispatcher = new MessageDispatcher(writes);
+        String write = "{\"walletAddress\":\"0xabc\",\"path\":\"/oak-chain/legacy\",\"contentType\":\"page\","
+            + "\"message\":\"m\",\"signature\":\"0xsig\",\"intentToken\":\"intent-legacy\",\"ipfsCid\":\"cid-1\"}";
+
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_PROPOSAL, write));
+        assertTrue(dispatch(dispatcher, SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, "{\"batch\":[" + write + "]}"));
+
+        Mockito.verify(writes, Mockito.times(2)).applyWrite(eq("0xabc"), eq("/oak-chain/legacy"), eq("page"), eq("m"),
+            eq("0xsig"), Mockito.isNull(), Mockito.isNull(), eq("cid-1"), any());
     }
 
     @Test
@@ -637,7 +652,7 @@ public class MessageDispatcherTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
-                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String signature, String blobId, String mimeType,
                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
                 throw termination;
             }

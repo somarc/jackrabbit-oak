@@ -297,7 +297,7 @@ public class DeleteApplicationServiceTest {
         DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
         String content = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/";
         for (int i = 1; i <= 3; i++) {
-            writes.applyWriteWithAuditMetadata(WALLET, content + "doc-" + i, "page", "m", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "p-" + i, null, null, null, null));
+            writes.applyWriteWithAuditMetadata(WALLET, content + "doc-" + i, "page", "m", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "p-" + i, null, null, null, null));
         }
 
         deletes.applyDeleteWithAuditMetadata(WALLET, content + "doc-1", "0xsig", MutationAuditMetadata.delete(null, null, "d-1", null, null, null, null));

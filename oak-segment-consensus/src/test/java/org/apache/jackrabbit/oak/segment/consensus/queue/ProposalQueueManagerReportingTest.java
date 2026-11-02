@@ -56,9 +56,7 @@ public class ProposalQueueManagerReportingTest {
                 "page",
                 "release flow payload",
                 "0xsig-release-flow",
-                ValidatorEarningsTracker.PaymentTier.STANDARD,
-                null
-            );
+                ValidatorEarningsTracker.PaymentTier.STANDARD);
 
             Map<String, Object> payload = queueManager.getProposalReleaseFlowStats();
 

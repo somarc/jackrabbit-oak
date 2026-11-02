@@ -210,9 +210,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Hello Oak Chain!",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null // no intent token
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
         
         // Verify queued
         QueuedProposal proposal = queueManager.getProposal(proposalId);
@@ -258,9 +256,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Needs two confirmations",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
 
         long paymentBlockNumber = bridge.getCurrentBlockNumber();
         bridge.simulateWriteAuthorizedEvent(
@@ -299,9 +295,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Priority routed through scheduler",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -341,9 +335,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Priority requested, standard proved",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -401,9 +393,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "hold until ingress accepts",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -472,9 +462,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "priority fallback",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -527,9 +515,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Standard tier content",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
         
         // Simulate payment event
         bridge.simulateWriteAuthorizedEvent(
@@ -561,9 +547,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Test",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
         
         // Verify it's pending
         QueuedProposal proposal = queueManager.getProposal(proposalId);
@@ -638,9 +622,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Adaptive tier content",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -732,9 +714,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Adaptive overflow content",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -906,9 +886,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Restore adaptive tier content",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         firstBridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -1034,9 +1012,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Restore adaptive overflow content",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         firstBridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -1187,9 +1163,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             message,
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -1314,9 +1288,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "retry me after durability stall",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
         bridge.simulateWriteAuthorizedEvent(
             proposalId,
@@ -1384,9 +1356,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             message,
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
 
         assertNull("Large payload should not remain inline in steady queue state", proposal.getMessage());
         assertNotNull("Large payload should have durable spill reference", proposal.getPayloadRef());
@@ -1441,9 +1411,7 @@ public class ProposalQueueIntegrationTest {
                 "page",
                 "first",
                 "0xsig...",
-                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                null
-            );
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
 
             try {
                 testQueue.queueProposal(
@@ -1454,9 +1422,7 @@ public class ProposalQueueIntegrationTest {
                     "page",
                     "second",
                     "0xsig...",
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                    null
-                );
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
                 fail("Second proposal should be rejected once hard pending limit is reached");
             } catch (java.util.concurrent.RejectedExecutionException expected) {
                 assertEquals("queue_overloaded", expected.getMessage());
@@ -1505,9 +1471,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "restore me from disk",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
         assertNotNull("Proposal should spill to disk before restart", queuedProposal.getPayloadRef());
 
         Path payloadPath = persistenceDir.resolve("payloads").resolve(queuedProposal.getPayloadRef());
@@ -1591,9 +1555,7 @@ public class ProposalQueueIntegrationTest {
                     "page",
                     "Message " + i,
                     "0xsig...",
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-                    null
-                );
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
                 
                 // Simulate payment event
                 bridge.simulateWriteAuthorizedEvent(
@@ -1694,9 +1656,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "Stats test",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
         
         // Get queue stats
         java.util.Map<String, Object> stats = queueManager.getQueueStats();
@@ -1733,9 +1693,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "standard",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
         QueuedProposal express = queueManager.queueProposal(
             "submission-epoch-express",
             "0xsubepoch2",
@@ -1744,9 +1702,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "express",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.EXPRESS);
         QueuedProposal priority = queueManager.queueProposal(
             "submission-epoch-priority",
             "0xsubepoch3",
@@ -1755,9 +1711,7 @@ public class ProposalQueueIntegrationTest {
             "page",
             "priority",
             "0xsig...",
-            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY,
-            null
-        );
+            org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.PRIORITY);
         QueuedProposal delete = queueManager.queueDeleteProposal(
             "submission-epoch-delete",
             "0xsubepoch4",
@@ -1825,9 +1779,7 @@ public class ProposalQueueIntegrationTest {
                     "page",
                     "standard-" + i,
                     "0xsig...",
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                    null
-                );
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
@@ -1892,9 +1844,7 @@ public class ProposalQueueIntegrationTest {
                     "page",
                     "slope-" + i,
                     "0xsig...",
-                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                    null
-                );
+                    org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
                 bridge.simulateWriteAuthorizedEvent(
                     proposalId,
                     walletAddress,
@@ -1984,9 +1934,7 @@ public class ProposalQueueIntegrationTest {
                 "page",
                 "counter-1",
                 "0xsig...",
-                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD,
-                null
-            );
+                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD);
             bridge.simulateWriteAuthorizedEvent(
                 proposalId,
                 walletAddress,

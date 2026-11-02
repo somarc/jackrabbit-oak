@@ -30,10 +30,10 @@ final class AeronClusterCallbackBinder {
         aeronEngine.setWriteApplicationCallback(new AeronConsensusEngine.WriteApplicationCallback() {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                             String signature, String intentToken, String blobId, String mimeType, String ipfsCid,
+                                             String signature, String blobId, String mimeType, String ipfsCid,
                                              MutationAuditMetadata auditMetadata) {
                 httpServer.getConsensusApiHandler().applyReplicatedWriteWithAuditMetadata(
-                    walletAddress, path, contentType, message, signature, intentToken, blobId, mimeType, ipfsCid,
+                    walletAddress, path, contentType, message, signature, blobId, mimeType, ipfsCid,
                     auditMetadata
                 );
             }

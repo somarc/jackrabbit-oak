@@ -76,7 +76,7 @@ public class ReplicatedBinaryClusterReadTest {
             new BlobOptions().setUpload(BlobOptions.UploadType.SYNCHRONOUS));
         String cid = ((IPFSDataStore) leader.blobStore.getDataStore()).getCID(blobId);
         for (Member member : List.of(leader, follower)) {
-            member.service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, blobId,
+            member.service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", blobId,
                 "application/octet-stream", cid,
                 MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
         }

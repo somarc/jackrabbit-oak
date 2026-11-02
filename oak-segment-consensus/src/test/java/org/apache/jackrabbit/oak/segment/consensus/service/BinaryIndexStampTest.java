@@ -98,7 +98,7 @@ public class BinaryIndexStampTest {
 
     private static void write(WriteApplicationService service, String name, String blobId, String cid,
                               long position, long time) {
-        service.applyWriteWithAuditMetadata(WALLET, ROOT + name, "file", "m", "0xsig", null, blobId,
+        service.applyWriteWithAuditMetadata(WALLET, ROOT + name, "file", "m", "0xsig", blobId,
             "image/png", cid, MutationAuditMetadata.write(null, null, "p-" + name, null, null, null, null)
                 .withAppliedAt(time).withAppliedLogPosition(new AppliedLogPosition(position, 0, 1)));
     }

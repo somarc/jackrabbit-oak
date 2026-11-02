@@ -36,7 +36,7 @@ final class AppliedProposals {
     static void applyWrite(NodeStore store, String wallet, String path, String proposalId) {
         new WriteApplicationService(mock(FileStore.class, RETURNS_DEEP_STUBS), () -> store, () -> null,
             mock(FileStoreFlushService.class)).applyWriteWithAuditMetadata(wallet, path, "page", "m", "0xsig",
-            null, null, null, null,
+            null, null, null,
             MutationAuditMetadata.write(null, null, proposalId, null, null, null, null).withAppliedAt(APPLIED_AT));
     }
 }
