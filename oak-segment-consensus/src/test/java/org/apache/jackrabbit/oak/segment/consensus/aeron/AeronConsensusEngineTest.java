@@ -63,6 +63,7 @@ import org.mockito.MockitoAnnotations;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -122,6 +123,19 @@ public class AeronConsensusEngineTest {
         assertEquals("term comes only from the log", 0, engine.getCurrentTerm());
         assertTrue(engine.isLeader());
         assertEquals("http://self:8080", engine.getCurrentLeader());
+    }
+
+    @Test
+    public void latestHeadFallsBackToFileStoreUntilAnApplyRecordsOne() {
+        FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
+        when(fileStore.getHead().getRecordId().toString10()).thenReturn("file-head:1");
+        AeronConsensusEngine engine = createEngine(fileStore, null);
+
+        assertEquals("file-head:1", engine.getLatestHead());
+        engine.updateLatestHead("applied-head:7");
+        assertEquals("applied-head:7", engine.getLatestHead());
+        assertNull(engine.getCommittedHead());
+        assertEquals(-1, engine.getLastCommittedEpoch());
     }
 
     @Test

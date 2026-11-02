@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.cluster.service.Cluster;
+import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +36,6 @@ import java.util.function.Supplier;
 class AeronBackgroundCoordinator implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(AeronBackgroundCoordinator.class);
-    private static final String GENESIS_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     interface TaskScheduler {
         void schedule(String name, long delayMs, Runnable task);
@@ -118,15 +118,7 @@ class AeronBackgroundCoordinator implements AutoCloseable {
         if (nodeStore == null) {
             return false;
         }
-        return nodeStore.getRoot()
-            .getChildNode("oak-chain")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode("00")
-            .getChildNode(GENESIS_ADDRESS)
-            .getChildNode("content")
-            .getChildNode("genesis")
-            .exists();
+        return CanonicalGenesisContent.getGenesisNode(nodeStore.getRoot()).exists();
     }
 
     void scheduleLeaderDiscovery(Supplier<Cluster.Role> localRole,

@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.QueuedProposal;
@@ -28,6 +29,8 @@ import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.LeaderWriteRedirectUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -41,6 +44,7 @@ import java.util.regex.Pattern;
  */
 final class ProposalRequestSupport {
 
+    private static final Logger log = LoggerFactory.getLogger(ProposalRequestSupport.class);
     private static final Pattern PROPOSAL_ID = Pattern.compile("(?i)^0x[a-f0-9]{64}$");
 
     private ProposalRequestSupport() {
@@ -107,8 +111,35 @@ final class ProposalRequestSupport {
         return new ClientLookup(registration, clientId);
     }
 
-    static boolean isValidProposalId(String trimmedProposalId) {
-        return PROPOSAL_ID.matcher(trimmedProposalId).matches();
+    /**
+     * ADR 028 pre-flight: sends 503 and returns true when the consensus engine is missing or the cluster is
+     * unhealthy, so a proposal is not silently lost.
+     */
+    static boolean rejectIfUnhealthy(ServerContext context, String flow, HttpServletResponse response)
+            throws IOException {
+        AeronConsensusEngine engine = context.aeronConsensusEngine;
+        if (engine != null && engine.isClusterHealthy()) {
+            return false;
+        }
+        String reason = engine != null ? engine.getUnhealthyReason() : "consensus_engine_not_configured";
+        log.warn("❌ Cluster unhealthy, rejecting {}: {}", flow, reason);
+        context.apiRejectedRequests.incrementAndGet();
+        ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+            "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
+        return true;
+    }
+
+    /**
+     * The 400 message for a missing or malformed client proposalId (V5: the on-chain bytes32 from
+     * {@code contractFlow}), or null when it is a 0x-prefixed 32-byte hex value.
+     */
+    static String proposalIdError(String rawProposalId, String contractFlow) {
+        if (rawProposalId == null || rawProposalId.trim().isEmpty()) {
+            return "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the "
+                + contractFlow + " flow.";
+        }
+        return PROPOSAL_ID.matcher(rawProposalId.trim()).matches() ? null
+            : "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.";
     }
 
     static String normalizeProposalId(String trimmedProposalId) {

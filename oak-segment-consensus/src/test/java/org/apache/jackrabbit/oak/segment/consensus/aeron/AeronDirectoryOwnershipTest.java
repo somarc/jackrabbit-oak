@@ -57,7 +57,7 @@ public class AeronDirectoryOwnershipTest {
     public void liveMediaDriverDirectoryIsRefusedNotDeleted() throws Exception {
         File mediaDir = new File(tempFolder.getRoot(), "media");
         try (MediaDriver owner = MediaDriver.launch(mediaDriverContext(mediaDir))) {
-            new AeronClusterStartupPreflight(0, mock(CrashHandler.class)).run(mediaDir.getAbsolutePath());
+            new AeronClusterStartupPreflight(mock(CrashHandler.class)).run(mediaDir.getAbsolutePath());
             assertTrue("preflight deleted a live driver's directory", new File(mediaDir, "cnc.dat").exists());
 
             AtomicInteger attempts = new AtomicInteger();
@@ -89,7 +89,7 @@ public class AeronDirectoryOwnershipTest {
         File leftover = new File(mediaDir, "leftover.dat");
         Files.write(leftover.toPath(), "x".getBytes(StandardCharsets.UTF_8));
 
-        new AeronClusterStartupPreflight(0, mock(CrashHandler.class)).run(mediaDir.getAbsolutePath());
+        new AeronClusterStartupPreflight(mock(CrashHandler.class)).run(mediaDir.getAbsolutePath());
         assertTrue("preflight must leave the decision to the media driver", leftover.exists());
 
         try (MediaDriver next = MediaDriver.launch(mediaDriverContext(mediaDir))) {

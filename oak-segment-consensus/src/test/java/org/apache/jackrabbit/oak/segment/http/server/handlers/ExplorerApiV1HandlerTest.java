@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.api.Type;
+import org.apache.jackrabbit.oak.plugins.memory.ArrayBasedBlob;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
@@ -41,6 +43,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -213,39 +216,6 @@ public class ExplorerApiV1HandlerTest {
     }
 
     @Test
-    public void testHandleReleaseFlowRequiresProposalQueue() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(newContext(new MemoryNodeStore()));
-        handler.handleReleaseFlow(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        assertTrue(body.toString().contains("Proposal queue not available"));
-    }
-
-    @Test
-    public void testHandleReleaseFlowReturnsFlowPayload() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-        ServerContext context = newContext(new MemoryNodeStore());
-        ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-        Map<String, Object> flow = new LinkedHashMap<>();
-        flow.put("releaseMode", "adaptive-active");
-        flow.put("releaseStages", new LinkedHashMap<String, Object>());
-        when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
-        context.proposalQueueManager = queueManager;
-
-        ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
-        handler.handleReleaseFlow(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"explorer.v1\""));
-        assertTrue(json.contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\",\"releaseStages\":{}}"));
-    }
-
-    @Test
     public void testHandleContentNavReturnsClusterAwareSections() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
@@ -277,7 +247,7 @@ public class ExplorerApiV1HandlerTest {
         context.shardingRuntimeConfig = ShardingRuntimeConfig.fromSpecs(true, "00-7f", "80-ff=http://validator-2:8090");
 
         ExplorerApiV1Handler handler = new ExplorerApiV1Handler(context);
-        handler.handleContentTree(response, LOCAL_CLUSTER_ID, "/oak-chain");
+        handler.handleContentTree(response, LOCAL_CLUSTER_ID, "/oak-chain", 0, ExplorerApiV1Handler.DEFAULT_TREE_PAGE_SIZE);
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
         String json = body.toString();
@@ -324,6 +294,31 @@ public class ExplorerApiV1HandlerTest {
             names.add(matcher.group(1));
         }
         return names;
+    }
+
+    @Test
+    public void testHandleContentNodeStringifiesTypedAndMultiValuedBinaryProperties() throws Exception {
+        MemoryNodeStore nodeStore = new MemoryNodeStore();
+        NodeBuilder root = nodeStore.getRoot().builder();
+        NodeBuilder doc = root.child("oak-chain").child("12").child("aa").child("doc");
+        doc.setProperty("flag", true);
+        doc.setProperty("count", 42L);
+        doc.setProperty("ratio", 1.5d);
+        doc.setProperty("tags", Arrays.asList("a", "b"), Type.STRINGS);
+        doc.setProperty("bins", Arrays.asList(new ArrayBasedBlob(new byte[3]), new ArrayBasedBlob(new byte[5])),
+            Type.BINARIES);
+        nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+
+        StringWriter body = new StringWriter();
+        new ExplorerApiV1Handler(newContext(nodeStore))
+            .handleContentNode(responseWithBody(body), LOCAL_CLUSTER_ID, "/oak-chain/12/aa/doc");
+
+        String json = body.toString();
+        assertTrue(json, json.contains("\"value\":\"true\""));
+        assertTrue(json, json.contains("\"value\":\"42\""));
+        assertTrue(json, json.contains("\"value\":\"1.5\""));
+        assertTrue(json, json.contains("\"values\":[\"a\",\"b\"]"));
+        assertTrue(json, json.contains("\"values\":[\"[Binary: 3 bytes]\",\"[Binary: 5 bytes]\"]"));
     }
 
     @Test

@@ -22,8 +22,14 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver.readBoolean;
+import static org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver.readInt;
+import static org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver.readLong;
+import static org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver.readString;
+
 /**
- * Read-only introspection helpers for effective Aeron cluster tuning.
+ * Read-only introspection helpers for effective Aeron cluster tuning, read through
+ * {@link org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver} so OSGi overrides show.
  */
 public final class AeronClusterTuningIntrospection {
 
@@ -37,7 +43,7 @@ public final class AeronClusterTuningIntrospection {
         AeronClusterRuntimeRegistry.Snapshot snapshot = AeronClusterRuntimeRegistry.snapshot();
         String effectiveSelfUrl = snapshot.selfUrl != null
             ? snapshot.selfUrl
-            : trimToNull(readString("consensus.self.url", null));
+            : AeronClusterRuntimeRegistry.trimToNull(readString("consensus.self.url", null));
         int effectivePeerCount = snapshot.peerUrls.isEmpty()
             ? countConfiguredValues(readString("consensus.peers", ""))
             : snapshot.peerUrls.size();
@@ -68,52 +74,11 @@ public final class AeronClusterTuningIntrospection {
         values.put("reconnect_max_attempts", readInt("oak.cluster.reconnect.maxAttempts", 0));
         values.put("max_concurrent_sessions", readInt("oak.cluster.max.concurrent.sessions", 0));
         values.put("peer_probe_mode", readString("oak.health.peerProbeMode", ""));
-        values.put("delete_aeron_dirs_on_startup", readBoolean("aeron.delete.dirs.on.startup", false));
         return values;
     }
 
     public static String source() {
         return RuntimePropertySourceRegistry.getSource(COMPONENT, "system-properties");
-    }
-
-    private static int readInt(String key, int defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
-    }
-
-    private static long readLong(String key, long defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
-    }
-
-    private static boolean readBoolean(String key, boolean defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        return Boolean.parseBoolean(raw.trim());
-    }
-
-    private static String readString(String key, String defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null) {
-            return defaultValue;
-        }
-        return raw;
     }
 
     private static int countConfiguredValues(String csv) {
@@ -127,13 +92,5 @@ public final class AeronClusterTuningIntrospection {
             }
         }
         return count;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 }

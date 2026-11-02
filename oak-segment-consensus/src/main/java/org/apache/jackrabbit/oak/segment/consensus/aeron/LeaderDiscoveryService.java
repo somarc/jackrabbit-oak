@@ -17,15 +17,10 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.cluster.service.Cluster;
-import org.osgi.service.component.annotations.Activate;
-import org.osgi.service.component.annotations.Component;
-import org.osgi.service.component.annotations.ConfigurationPolicy;
-import org.osgi.service.component.annotations.Deactivate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Service responsible for discovering the current cluster leader.
@@ -33,8 +28,6 @@ import java.util.Map;
  * <p>Extracted from AeronConsensusEngine to isolate leader discovery logic
  * and improve testability. Handles mapping Aeron member IDs to validator URLs
  * and caching leader information.
- * 
- * <p><strong>OSGi Component:</strong> Stateful service with lifecycle management.
  * 
  * <p><strong>Responsibilities:</strong>
  * <ul>
@@ -52,15 +45,6 @@ import java.util.Map;
  *   <li>Fallback to peer polling only while no leader is known</li>
  * </ol>
  */
-@Component(
-    service = LeaderDiscoveryService.class,
-    immediate = true,
-    configurationPolicy = ConfigurationPolicy.OPTIONAL,
-    property = {
-        "service.description=Leader Discovery Service",
-        "service.vendor=Apache Software Foundation"
-    }
-)
 public class LeaderDiscoveryService {
     
     private static final Logger log = LoggerFactory.getLogger(LeaderDiscoveryService.class);
@@ -80,7 +64,6 @@ public class LeaderDiscoveryService {
      */
     public static final String LOCAL_ONLY_PARAM = "localOnly";
     
-    private final Map<Integer, String> nodeIdToUrl;
     private final List<String> peerUrls;
     
     private final java.util.concurrent.atomic.AtomicBoolean peerPollInFlight =
@@ -97,57 +80,10 @@ public class LeaderDiscoveryService {
     private volatile String selfUrl = null;
     
     /**
-     * Create a new leader discovery service (default constructor for OSGi).
+     * @param peerUrls peer validator URLs to poll while no leader is known
      */
-    public LeaderDiscoveryService() {
-        this.nodeIdToUrl = new java.util.concurrent.ConcurrentHashMap<>();
-        this.peerUrls = new java.util.ArrayList<>();
-    }
-    
-    /**
-     * Create a new leader discovery service with mappings (for programmatic use).
-     * 
-     * @param nodeIdToUrl mapping of Aeron member IDs to validator URLs
-     * @param peerUrls list of peer validator URLs
-     */
-    public LeaderDiscoveryService(Map<Integer, String> nodeIdToUrl, List<String> peerUrls) {
-        this.nodeIdToUrl = nodeIdToUrl;
+    public LeaderDiscoveryService(List<String> peerUrls) {
         this.peerUrls = peerUrls;
-    }
-    
-    /**
-     * OSGi lifecycle: Activate component.
-     */
-    @Activate
-    protected void activate() {
-        log.info("✅ LeaderDiscoveryService activated: peers={}", peerUrls.size());
-    }
-    
-    /**
-     * OSGi lifecycle: Deactivate component.
-     */
-    @Deactivate
-    protected void deactivate() {
-        log.info("✅ LeaderDiscoveryService deactivated");
-        invalidateCache();
-    }
-    
-    /**
-     * Set node ID mappings (for OSGi injection).
-     */
-    public void setNodeIdMapping(Map<Integer, String> nodeIdToUrl) {
-        this.nodeIdToUrl.clear();
-        this.nodeIdToUrl.putAll(nodeIdToUrl);
-        log.debug("Updated node ID mapping: {}", nodeIdToUrl);
-    }
-    
-    /**
-     * Set peer URLs (for OSGi injection).
-     */
-    public void setPeerUrls(List<String> peerUrls) {
-        this.peerUrls.clear();
-        this.peerUrls.addAll(peerUrls);
-        log.debug("Updated peer URLs: {}", peerUrls);
     }
     
     /**
@@ -246,7 +182,7 @@ public class LeaderDiscoveryService {
         // known value instead of waiting, so a slow poll never holds more than one request thread.
         if (!peerPollInFlight.compareAndSet(false, true)) {
             log.debug("Peer leader poll already in flight, returning last known leader");
-            return getBestKnownLeaderUrl();
+            return getKnownLeaderHint();
         }
         try {
             log.debug("Leader discovery from Aeron failed, polling peers...");
@@ -495,15 +431,5 @@ public class LeaderDiscoveryService {
      */
     public boolean isLeaderKnown() {
         return knownLeaderUrl != null || cachedLeaderUrl != null;
-    }
-    
-    /**
-     * Get the best known leader URL (tracked > cached).
-     */
-    public String getBestKnownLeaderUrl() {
-        if (knownLeaderUrl != null) {
-            return knownLeaderUrl;
-        }
-        return cachedLeaderUrl;
     }
 }

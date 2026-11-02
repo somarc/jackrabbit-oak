@@ -69,6 +69,8 @@ public class AeronPrometheusMetrics implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final List<Gauge> systemGauges = new ArrayList<>();
     private final Map<Integer, StreamGauge> streamGauges = new ConcurrentHashMap<>();
+    /** One labelled gauge per stream counter type; a collector name can be registered only once. */
+    private final Map<Integer, Gauge> streamGaugesByType = new ConcurrentHashMap<>();
     private volatile boolean closed = false;
     
     /**
@@ -218,19 +220,17 @@ public class AeronPrometheusMetrics implements AutoCloseable {
                     metaDataOffset(counterId) + KEY_OFFSET, 
                     MAX_KEY_LENGTH);
                 
-                String label = reader.getCounterLabel(counterId);
                 int sessionId = keyBuffer.getInt(SESSION_ID_OFFSET);
                 int streamId = keyBuffer.getInt(STREAM_ID_OFFSET);
                 String channel = keyBuffer.getStringAscii(CHANNEL_OFFSET);
                 
                 String metricName = streamMetricName(typeId);
                 
-                // Create Prometheus gauge with labels
-                Gauge gauge = Gauge.build()
+                Gauge gauge = streamGaugesByType.computeIfAbsent(typeId, type -> Gauge.build()
                     .name("aeron_" + sanitize(metricName))
-                    .help(label)
+                    .help("Aeron " + metricName + " stream counter")
                     .labelNames("session_id", "stream_id", "channel")
-                    .register();
+                    .register());
                 
                 // Initialize gauge value
                 gauge.labels(
@@ -254,14 +254,6 @@ public class AeronPrometheusMetrics implements AutoCloseable {
         return false;
     }
     
-    /**
-     * Update all gauge values before Prometheus scrape.
-     * This should be called by MetricsHandler before exporting metrics.
-     */
-    public void updateGaugeValues() {
-        updateMetrics(); // Same as updateMetrics()
-    }
-
     private static String streamMetricName(int typeId) {
         if (typeId == PUBLISHER_LIMIT_TYPE_ID) {
             return "pub_limit";

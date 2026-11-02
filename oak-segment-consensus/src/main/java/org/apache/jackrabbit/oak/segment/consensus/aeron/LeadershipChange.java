@@ -30,11 +30,6 @@ public class LeadershipChange {
     public final int memberId;
     public final String memberUrl;
 
-    public LeadershipChange(long timestamp, Cluster.Role newRole, Cluster.Role previousRole,
-                            int term, int memberId, String memberUrl) {
-        this(timestamp, -1L, newRole, previousRole, term, memberId, memberUrl);
-    }
-
     public LeadershipChange(long timestamp, long clusterTime,
                             Cluster.Role newRole, Cluster.Role previousRole,
                             int term, int memberId, String memberUrl) {
