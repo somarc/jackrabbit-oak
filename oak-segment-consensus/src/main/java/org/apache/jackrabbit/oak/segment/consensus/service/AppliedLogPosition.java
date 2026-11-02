@@ -30,7 +30,7 @@ import org.jetbrains.annotations.Nullable;
  * <p>It is written in the same Oak merge as the mutation, under the hidden root node {@value #NODE_NAME},
  * so the store and the watermark can never disagree. Entries at or below it are already in the store.
  */
-public final class AppliedLogPosition implements Comparable<AppliedLogPosition> {
+public record AppliedLogPosition(long position, int item, long term) implements Comparable<AppliedLogPosition> {
 
     public static final String NODE_NAME = ":consensus";
     static final String POSITION = "appliedLogPosition";
@@ -39,28 +39,6 @@ public final class AppliedLogPosition implements Comparable<AppliedLogPosition> 
 
     /** Nothing applied yet (fresh store, or a store written before the watermark existed). */
     public static final AppliedLogPosition NONE = new AppliedLogPosition(0, 0, -1);
-
-    private final long position;
-    private final int item;
-    private final long term;
-
-    public AppliedLogPosition(long position, int item, long term) {
-        this.position = position;
-        this.item = item;
-        this.term = term;
-    }
-
-    public long position() {
-        return position;
-    }
-
-    public int item() {
-        return item;
-    }
-
-    public long term() {
-        return term;
-    }
 
     public boolean isNone() {
         return position <= 0;
@@ -104,20 +82,6 @@ public final class AppliedLogPosition implements Comparable<AppliedLogPosition> 
     public int compareTo(@NotNull AppliedLogPosition other) {
         int byPosition = Long.compare(position, other.position);
         return byPosition != 0 ? byPosition : Integer.compare(item, other.item);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (!(o instanceof AppliedLogPosition)) {
-            return false;
-        }
-        AppliedLogPosition other = (AppliedLogPosition) o;
-        return position == other.position && item == other.item && term == other.term;
-    }
-
-    @Override
-    public int hashCode() {
-        return Long.hashCode(position) * 31 + item * 7 + Long.hashCode(term);
     }
 
     @Override

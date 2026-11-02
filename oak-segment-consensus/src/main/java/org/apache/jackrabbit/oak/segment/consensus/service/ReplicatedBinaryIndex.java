@@ -170,29 +170,7 @@ public final class ReplicatedBinaryIndex implements CidResolver {
     }
 
     /** An index entry: its identifier and the log position and cluster time of its last reference. */
-    public static final class Entry {
-        private final String identifier;
-        private final long refPosition;
-        private final long refTime;
-
-        public Entry(@NotNull String identifier, long refPosition, long refTime) {
-            this.identifier = identifier;
-            this.refPosition = refPosition;
-            this.refTime = refTime;
-        }
-
-        @NotNull
-        public String identifier() {
-            return identifier;
-        }
-
-        public long refPosition() {
-            return refPosition;
-        }
-
-        public long refTime() {
-            return refTime;
-        }
+    public record Entry(@NotNull String identifier, long refPosition, long refTime) {
     }
 
     private static NodeBuilder entry(NodeBuilder root, String identifier) {

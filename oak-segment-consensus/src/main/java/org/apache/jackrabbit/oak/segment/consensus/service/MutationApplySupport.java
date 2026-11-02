@@ -29,11 +29,14 @@ import org.slf4j.Logger;
 
 import java.util.Collections;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /**
- * Steps shared by the replicated write and delete appliers.
+ * Steps shared by the replicated appliers.
  */
 final class MutationApplySupport {
+
+    static final Pattern WALLET_NODE_NAME = Pattern.compile("0x[a-f0-9]{40}");
 
     private MutationApplySupport() {
     }
@@ -51,10 +54,10 @@ final class MutationApplySupport {
      * Commit a replicated mutation, recording the applied log position (watermark) in the same merge.
      */
     static void mergeReplicated(NodeStore nodeStore, NodeBuilder rootBuilder, String commitMessage,
-                                @Nullable MutationAuditMetadata auditMetadata, String failureMessage) {
+                                @Nullable AppliedLogPosition position, String failureMessage) {
         CommitInfo commitInfo = new CommitInfo(commitMessage, null, Collections.singletonMap("replicated", "true"));
-        if (auditMetadata != null && auditMetadata.getAppliedLogPosition() != null) {
-            auditMetadata.getAppliedLogPosition().writeTo(rootBuilder);
+        if (position != null) {
+            position.writeTo(rootBuilder);
         }
         try {
             nodeStore.merge(rootBuilder, EmptyHook.INSTANCE, commitInfo);

@@ -26,11 +26,6 @@ public enum ProposalState {
     PENDING,
     
     /**
-     * Ethereum transaction confirmed (mined).
-     */
-    CONFIRMED,
-    
-    /**
      * Verified on-chain, ready for Raft append.
      */
     VERIFIED,

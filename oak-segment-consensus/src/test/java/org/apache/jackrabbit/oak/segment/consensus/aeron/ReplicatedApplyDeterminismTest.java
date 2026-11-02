@@ -96,8 +96,8 @@ public class ReplicatedApplyDeterminismTest {
     private static MessageDispatcher dispatcherFor(MemoryNodeStore nodeStore) {
         FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
         FileStoreFlushService flush = mock(FileStoreFlushService.class);
-        WriteApplicationService writes = new WriteApplicationService(fileStore, nodeStore, null, flush);
-        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, nodeStore, flush);
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> nodeStore, () -> null, flush);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> nodeStore, flush);
         return new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,

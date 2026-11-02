@@ -135,7 +135,13 @@ public class AeronIngressWritePayloadBuilderTest {
         first.setSignature("sig-a");
         first.setIntentToken("intent-1");
 
-        QueuedProposal second = proposal("proposal-2");
+        QueuedProposal second = new QueuedProposal("proposal-2", "0xtx", 1L, 2L, ProposalState.PENDING) {
+            @Override
+            public MutationAuditMetadata toAuditMetadata() {
+                return new MutationAuditMetadata(MutationAuditMetadata.Operation.WRITE, "tx-2", "corr-2",
+                    getProposalId(), getEthereumTxHash(), getConfirmedBlock(), 21L, 22L);
+            }
+        };
         second.setWalletAddress("0xbbb");
         second.setPath("/content/b");
         second.setContentType("asset");
@@ -144,12 +150,8 @@ public class AeronIngressWritePayloadBuilderTest {
         second.setBlobId("blob-2");
         second.setMimeType("image/png");
         second.setIpfsCid("bafy456");
-        second.setTransactionId("tx-2");
-        second.setCorrelationId("corr-2");
         second.setConfirmedBlock(Long.valueOf(64));
         second.setEpoch(999L);
-        second.setObservedEpoch(Long.valueOf(21));
-        second.setFinalizedEpoch(Long.valueOf(22));
 
         AeronEncodedMessage encoded =
             builder.buildWriteBatch(List.of(first, second), Integer.valueOf(11));

@@ -56,42 +56,16 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * Optimized proposal queue manager with production throughput patterns.
- * 
- * <p><strong>Key Optimizations:</strong>
- * <ol>
- *   <li><strong>Message Batching</strong>: Process up to 10 verified proposals per Aeron cycle</li>
- *   <li><strong>Dual-Agent Architecture</strong>:
- *     <ul>
- *       <li>Fast Agent: Sends verified proposals to Aeron (ultra-low latency)</li>
- *       <li>Slow Agent: EVM signature verification (can take 1-100ms without blocking Aeron)</li>
- *     </ul>
- *   </li>
- *   <li><strong>BackoffIdleStrategy</strong>: Intelligent CPU usage (spin → yield → park)</li>
- * </ol>
- * 
- * <p><strong>Security Architecture:</strong>
- * <p>The EVM Verifier Agent enforces three security checkpoints BEFORE proposals reach Aeron:
- * <ol>
- *   <li><strong>Ethereum Transaction Validation</strong>: Verifies payment proof exists, is confirmed,
- *       went to correct contract, and has sufficient amount</li>
- *   <li><strong>Cryptographic Signature Verification</strong>: Verifies ECDSA signature matches
- *       wallet address and is specific to this write operation</li>
- *   <li><strong>Authorization Check</strong>: Verifies wallet has permission to write to the
- *       requested path (sharding rules, quotas, bans)</li>
- * </ol>
- * 
- * <p><strong>Architecture:</strong>
+ * Proposal queue between the HTTP API and the Aeron log.
+ *
+ * <p>Three agents run the pipeline: EVM verifier agents check payment proof, signature and path authorization
+ * and move proposals into the adaptive packing buffer; the release finalizer drains that buffer into per-wallet
+ * batches under the {@link AdaptiveReleaseGovernor}, or into the overflow buffer under backpressure; the Aeron
+ * sender appends release-ready batches to the replicated log.
+ *
  * <pre>
- * HTTP API → Unverified Queue → [EVM Agent w/ Security Checks] → Verified Queue → [Aeron Agent] → Raft
- *                 ↓ slow (1-100ms, 3 security checkpoints)     ↑ fast (0.1ms, batched, ONLY validated proposals)
+ * HTTP API → unverified queue → [verifier] → packing buffer → [finalizer] → release-ready / overflow → [sender] → Aeron
  * </pre>
- * 
- * <p><strong>Expected Performance:</strong>
- * <ul>
- *   <li>Current: ~100 writes/sec (single-threaded, 10ms delay)</li>
- *   <li>Optimized: ~1,000-2,000 writes/sec (dual-agent, batching, no delay)</li>
- * </ul>
  */
 public class ProposalQueueManagerOptimized {
     private static final int CAPABILITY_VALIDATOR_HOSTED_BINARY = 1 << 0;
@@ -154,8 +128,7 @@ public class ProposalQueueManagerOptimized {
 
     private final int verifierThreads;
     
-    // Metrics: legacy compatibility tier routing
-    private final AtomicLong priorityProposalsSent = new AtomicLong(0);
+    // Metrics: proposals appended to the log
     private final AtomicLong batchedProposalsSent = new AtomicLong(0);
     
     // Metrics: Persistent counters (survive proposal removal from allProposals)
@@ -165,7 +138,6 @@ public class ProposalQueueManagerOptimized {
     private final AtomicLong lifetimeRejectedBase = new AtomicLong(0);
     private final AtomicLong lifetimeVerifiedBase = new AtomicLong(0);
     private final AtomicLong lifetimeFinalizedBase = new AtomicLong(0);
-    private final AtomicLong lifetimePrioritySentBase = new AtomicLong(0);
     private final AtomicLong lifetimeBatchedSentBase = new AtomicLong(0);
     private final AtomicLong counterWindowStartMs =
         new AtomicLong(System.currentTimeMillis());
@@ -212,17 +184,7 @@ public class ProposalQueueManagerOptimized {
     private final AtomicLong payloadResolveCount = new AtomicLong(0);
     private final AtomicLong payloadResolveNanos = new AtomicLong(0);
     private final AtomicLong payloadResolveLastMs = new AtomicLong(0);
-    private volatile String lastAdaptiveDecisionSignature =
-        AdaptiveReleaseGovernor.Decision.healthyDirect().signature();
-    
-    /**
-     * Create optimized proposal queue manager with adaptive verified release.
-     * 
-     * @param evmBridge EVM bridge for payment verification
-     * @param raftAppendCallback Callback to append verified proposals to Raft
-     * @param backpressureManager Backpressure manager for flow control
-     * @param beaconClient Beacon Chain client for real-time Ethereum epoch tracking
-     */
+
     private volatile Supplier<NodeState> committedRoot;
 
     /**
@@ -392,14 +354,6 @@ public class ProposalQueueManagerOptimized {
         return beaconClient;
     }
 
-    public long getCurrentEpoch() {
-        return resolveCurrentEpoch();
-    }
-
-    public long getFinalizedEpoch() {
-        return resolveFinalizedEpoch();
-    }
-    
     /**
      * Get comprehensive queue statistics for dashboard display.
      */
@@ -433,8 +387,6 @@ public class ProposalQueueManagerOptimized {
         stats.put("currentEpoch", currentEpoch);
         stats.put("finalizedEpoch", finalizedEpoch);
         stats.put("epochsUntilFinality", currentEpoch >= 0 && finalizedEpoch >= 0 ? currentEpoch - finalizedEpoch : -1L);
-        stats.put("adaptivePackingBufferStats", adaptivePackingBuffer.getStats());
-        stats.put("backpressureOverflowStats", backpressureOverflowBuffer.getStats());
         stats.put("adaptivePackingWalletCount", adaptiveWalletCount);
         stats.put("adaptiveVerifiedPackingBufferCount", adaptiveVerifiedPackingBufferCount);
         stats.put("verifiedPackingBufferCount", verifiedPackingBufferCount);
@@ -495,12 +447,10 @@ public class ProposalQueueManagerOptimized {
         long rejectedCurrent = totalRejectedCount.get();
         long verifiedCurrent = totalVerifiedCount.get();
         long finalizedCurrent = totalFinalizedCount.get();
-        long priorityCurrent = priorityProposalsSent.get();
         long batchedCurrent = batchedProposalsSent.get();
         long rejectedLifetime = lifetimeRejectedBase.get() + rejectedCurrent;
         long verifiedLifetime = lifetimeVerifiedBase.get() + verifiedCurrent;
         long finalizedLifetime = lifetimeFinalizedBase.get() + finalizedCurrent;
-        long priorityLifetime = lifetimePrioritySentBase.get() + priorityCurrent;
         long batchedLifetime = lifetimeBatchedSentBase.get() + batchedCurrent;
         stats.put("counterWindowStartMs", counterWindowStartMs.get());
         stats.put("counterRotationIntervalMs", counterRotationIntervalMs);
@@ -521,17 +471,6 @@ public class ProposalQueueManagerOptimized {
         
         stats.put("writeProposals", writeProposals);
         stats.put("deleteProposals", deleteProposals);
-        
-        // Per-epoch proposal counts (for triangular pipeline visualization)
-        // Group by SUBMISSION EPOCH (simpler, shows when proposals entered the queue)
-        Map<Long, Long> proposalsByEpoch = new HashMap<>();
-        for (QueuedProposal proposal : allProposals.values()) {
-            if (proposal.getState() == ProposalState.VERIFIED || proposal.getState() == ProposalState.PENDING) {
-                long epoch = proposal.getEpoch();
-                proposalsByEpoch.merge(epoch, 1L, Long::sum);
-            }
-        }
-        stats.put("proposalsByEpoch", proposalsByEpoch);
         
         // Backpressure stats
         long backpressurePendingRaw = backpressureManager.getPendingCount();
@@ -599,39 +538,14 @@ public class ProposalQueueManagerOptimized {
         stats.put("adaptiveReleaseGovernorState", adaptiveDecision.state().name());
         stats.put("adaptiveReleaseAction", adaptiveDecision.action().name());
         stats.put("adaptiveReleaseReasonCodes", adaptiveDecision.reasonCodes());
-        Map<String, Object> releasePolicy = new LinkedHashMap<>();
-        releasePolicy.put("scheduler", "adaptive");
-        releasePolicy.put("releaseMode", releaseMode.configValue());
-        releasePolicy.put("requiredConfirmations", requiredConfirmations);
-        releasePolicy.put("note", "Verified proposals drain through the adaptive governor. Tier-specific queue behavior is retired.");
-        stats.put("releasePolicy", releasePolicy);
-        Map<String, Object> releaseFlow = new LinkedHashMap<>();
-        releaseFlow.put("scheduler", "adaptive");
-        releaseFlow.put("stages", runtimeStages);
-        Map<String, Object> governor = new LinkedHashMap<>();
-        governor.put("state", adaptiveDecision.state().name());
-        governor.put("action", adaptiveDecision.action().name());
-        governor.put("reasonCodes", adaptiveDecision.reasonCodes());
-        releaseFlow.put("governor", governor);
-        Map<String, Object> backpressure = new LinkedHashMap<>();
-        backpressure.put("active", backpressureActive);
-        backpressure.put("pendingCount", backpressurePending);
-        backpressure.put("pendingRawCount", backpressurePendingRaw);
-        backpressure.put("maxPending", backpressureMax);
-        backpressure.put("pendingOldestMs", backpressurePendingOldestMs);
-        backpressure.put("pendingStalledMs", backpressurePendingStalledMs);
-        releaseFlow.put("backpressure", backpressure);
-        releaseFlow.put("adaptivePacking", adaptivePackingBuffer.getStats());
-        releaseFlow.put("overflow", backpressureOverflowBuffer.getStats());
-        stats.put("releaseFlow", releaseFlow);
         
-        // Tier routing stats (current window + lifetime)
-        stats.put("priorityProposalsSent", priorityCurrent);
+        // Sent counters (current window + lifetime); the priority keys stay at 0 for stable output.
+        stats.put("priorityProposalsSent", 0L);
         stats.put("batchedProposalsSent", batchedCurrent);
-        stats.put("totalProposalsSent", priorityCurrent + batchedCurrent);
-        stats.put("priorityProposalsSentLifetime", priorityLifetime);
+        stats.put("totalProposalsSent", batchedCurrent);
+        stats.put("priorityProposalsSentLifetime", 0L);
         stats.put("batchedProposalsSentLifetime", batchedLifetime);
-        stats.put("totalProposalsSentLifetime", priorityLifetime + batchedLifetime);
+        stats.put("totalProposalsSentLifetime", batchedLifetime);
         
         // Retry stats
         long proposalsWithRetries = allProposals.values().stream()
@@ -741,26 +655,6 @@ public class ProposalQueueManagerOptimized {
             getReleasePressureProposalCount()
         );
         return adaptiveReleaseGovernor.evaluate(signals);
-    }
-
-    private void captureAdaptiveReleaseDecision(long nowMs) {
-        AdaptiveReleaseGovernor.Decision decision = evaluateAdaptiveReleaseDecision(nowMs);
-        String signature = decision.signature();
-        if (releaseMode == AdaptiveReleaseMode.ADAPTIVE_SHADOW && !signature.equals(lastAdaptiveDecisionSignature)) {
-            lastAdaptiveDecisionSignature = signature;
-            log.info("ADAPTIVE_RELEASE_SHADOW state={} action={} reasons={} gap={} packing={} releaseReady={} pending={} pendingOldestMs={} pendingStalledMs={}",
-                decision.state(),
-                decision.action(),
-                decision.reasonCodes(),
-                Math.max(0L, totalVerifiedCount.get() - totalFinalizedCount.get()),
-                getVerifiedPackingBufferCount(),
-                getReleasePressureProposalCount(),
-                backpressureManager.getPendingCount(),
-                backpressureManager.getPendingOldestMs(nowMs),
-                backpressureManager.getPendingStalledMs(nowMs));
-        } else if (!signature.equals(lastAdaptiveDecisionSignature)) {
-            lastAdaptiveDecisionSignature = signature;
-        }
     }
 
     private long getVerifiedPackingBufferCount() {
@@ -923,7 +817,7 @@ public class ProposalQueueManagerOptimized {
             return 0;
         }
 
-        int maxReleaseReadyBatches = Math.max(maxMessageBatch, maxMessageBatch * 2);
+        int maxReleaseReadyBatches = maxMessageBatch * 2;
         if (batchQueue.size() >= maxReleaseReadyBatches) {
             return 0;
         }
@@ -1014,11 +908,10 @@ public class ProposalQueueManagerOptimized {
             log.info("Proposal queue persistence disabled via tuning (persistence_enabled=false)");
             return null;
         }
-        String resolved = resolvePersistenceDirectory(persistenceDir);
-        if (resolved == null || resolved.isEmpty()) {
+        if (persistenceDir == null || persistenceDir.isEmpty()) {
             return null;
         }
-        return new ProposalPersistenceStore(java.nio.file.Path.of(resolved));
+        return new ProposalPersistenceStore(java.nio.file.Path.of(persistenceDir));
     }
 
     private ProposalPayloadStore createPayloadStore(String persistenceDir, ProposalQueueTuning tuning) {
@@ -1035,38 +928,18 @@ public class ProposalQueueManagerOptimized {
     }
 
     private QueueCounterStateStore createCounterStateStore(String persistenceDir) {
-        String resolved = resolvePersistenceDirectory(persistenceDir);
-        if (resolved == null || resolved.isEmpty()) {
+        if (persistenceDir == null || persistenceDir.isEmpty()) {
             return null;
         }
-        return new QueueCounterStateStore(java.nio.file.Path.of(resolved));
-    }
-
-    private String resolvePersistenceDirectory(String persistenceDir) {
-        String resolved = persistenceDir;
-        if (resolved == null || resolved.isEmpty()) {
-            resolved = System.getProperty("oak.proposal.persistence.dir");
-        }
-        if (resolved == null || resolved.isEmpty()) {
-            resolved = System.getenv("OAK_PROPOSAL_PERSISTENCE_DIR");
-        }
-        return resolved;
+        return new QueueCounterStateStore(java.nio.file.Path.of(persistenceDir));
     }
 
     private java.nio.file.Path resolvePayloadSpillDirectory(String persistenceDir, ProposalQueueTuning tuning) {
         if (tuning != null && tuning.payloadSpillDir() != null && !tuning.payloadSpillDir().trim().isEmpty()) {
             return java.nio.file.Path.of(tuning.payloadSpillDir().trim());
         }
-        String configured = System.getProperty("oak.proposal.payload.spill.dir");
-        if (configured == null || configured.trim().isEmpty()) {
-            configured = System.getenv("OAK_PROPOSAL_PAYLOAD_SPILL_DIR");
-        }
-        if (configured != null && !configured.trim().isEmpty()) {
-            return java.nio.file.Path.of(configured.trim());
-        }
-        String resolvedPersistenceDir = resolvePersistenceDirectory(persistenceDir);
-        if (resolvedPersistenceDir != null && !resolvedPersistenceDir.isEmpty()) {
-            return java.nio.file.Path.of(resolvedPersistenceDir).resolve("payloads");
+        if (persistenceDir != null && !persistenceDir.isEmpty()) {
+            return java.nio.file.Path.of(persistenceDir).resolve("payloads");
         }
         return null;
     }
@@ -1082,12 +955,10 @@ public class ProposalQueueManagerOptimized {
         totalRejectedCount.set(state.getOrDefault("current.rejected", 0L));
         totalVerifiedCount.set(state.getOrDefault("current.verified", 0L));
         totalFinalizedCount.set(state.getOrDefault("current.finalized", 0L));
-        priorityProposalsSent.set(state.getOrDefault("current.prioritySent", 0L));
         batchedProposalsSent.set(state.getOrDefault("current.batchedSent", 0L));
         lifetimeRejectedBase.set(state.getOrDefault("lifetime.rejected", 0L));
         lifetimeVerifiedBase.set(state.getOrDefault("lifetime.verified", 0L));
         lifetimeFinalizedBase.set(state.getOrDefault("lifetime.finalized", 0L));
-        lifetimePrioritySentBase.set(state.getOrDefault("lifetime.prioritySent", 0L));
         lifetimeBatchedSentBase.set(state.getOrDefault("lifetime.batchedSent", 0L));
         counterWindowStartMs.set(state.getOrDefault("window.start.ms", System.currentTimeMillis()));
     }
@@ -1100,12 +971,10 @@ public class ProposalQueueManagerOptimized {
         state.put("current.rejected", totalRejectedCount.get());
         state.put("current.verified", totalVerifiedCount.get());
         state.put("current.finalized", totalFinalizedCount.get());
-        state.put("current.prioritySent", priorityProposalsSent.get());
         state.put("current.batchedSent", batchedProposalsSent.get());
         state.put("lifetime.rejected", lifetimeRejectedBase.get());
         state.put("lifetime.verified", lifetimeVerifiedBase.get());
         state.put("lifetime.finalized", lifetimeFinalizedBase.get());
-        state.put("lifetime.prioritySent", lifetimePrioritySentBase.get());
         state.put("lifetime.batchedSent", lifetimeBatchedSentBase.get());
         state.put("window.start.ms", counterWindowStartMs.get());
         counterStateStore.save(state);
@@ -1128,19 +997,17 @@ public class ProposalQueueManagerOptimized {
             long verified = totalVerifiedCount.getAndSet(0L);
             long finalized = totalFinalizedCount.getAndSet(0L);
             long rejected = totalRejectedCount.getAndSet(0L);
-            long prioritySent = priorityProposalsSent.getAndSet(0L);
             long batchedSent = batchedProposalsSent.getAndSet(0L);
 
             lifetimeVerifiedBase.addAndGet(verified);
             lifetimeFinalizedBase.addAndGet(finalized);
             lifetimeRejectedBase.addAndGet(rejected);
-            lifetimePrioritySentBase.addAndGet(prioritySent);
             lifetimeBatchedSentBase.addAndGet(batchedSent);
             counterWindowStartMs.set(nowMs);
             persistCounterState();
 
-            log.info("🔁 Rotated proposal counters windowMs={} verified={} finalized={} rejected={} prioritySent={} batchedSent={}",
-                counterRotationIntervalMs, verified, finalized, rejected, prioritySent, batchedSent);
+            log.info("🔁 Rotated proposal counters windowMs={} verified={} finalized={} rejected={} batchedSent={}",
+                counterRotationIntervalMs, verified, finalized, rejected, batchedSent);
         }
     }
     
@@ -1488,20 +1355,6 @@ public class ProposalQueueManagerOptimized {
         return totalPending >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) totalPending;
     }
     
-    /**
-     * Get queue statistics.
-     */
-    public String getStats() {
-        return String.format("Unverified: %d, Verified Buffer: %d, Batches Ready: %d, Overflow: %d, Total: %d | Adaptive: %s | Overflow Buffer: %s",
-            unverifiedQueue.size(),
-            getVerifiedPackingBufferCount(),
-            batchQueue.size(),
-            backpressureOverflowBuffer.getPendingBatchCount(),
-            allProposals.size(),
-            adaptivePackingBuffer.getStats(),
-            backpressureOverflowBuffer.getStats());
-    }
-
     private void enforceAdmissionCapacity() {
         if (getPendingCount() >= hardMaxPendingProposals) {
             payloadOverloadRejectCount.incrementAndGet();
@@ -1751,8 +1604,7 @@ public class ProposalQueueManagerOptimized {
                 try {
                     int sent = 0;
                     
-                    // 🧪 DIAGNOSTIC: Send single-item batches as individual proposals (templateId 100/101)
-                    // This isolates whether the issue is queue mechanism vs templateId 106 encoding
+                    // Single-item batches go out as individual proposals (templateId 100/101).
                     if (batch.size() == 1) {
                         QueuedProposal proposal = batch.get(0);
                         MutationAuditMetadata auditMetadata = proposal.toAuditMetadata();
@@ -1811,7 +1663,7 @@ public class ProposalQueueManagerOptimized {
                         persistProposals();
                         
                         batchSentLog.info(
-                            "✅ Batch sent to Aeron: {} proposals in 1 message (diagnostic mode: {})",
+                            "✅ Batch sent to Aeron: {} proposals in 1 message ({})",
                             sent, batch.size() == 1 ? "templateId 100" : "templateId 106");
                     } else {
                         // Batch send failed - re-queue for retry
@@ -2086,9 +1938,6 @@ public class ProposalQueueManagerOptimized {
                 long attemptStartNs = System.nanoTime();
                 verifierAttemptCount.incrementAndGet();
                 try {
-                    // ═══════════════════════════════════════════════════════════
-                    // TIMEOUT CHECK: Ensure proposal doesn't wait forever
-                    // ═══════════════════════════════════════════════════════════
                     if (System.currentTimeMillis() > proposal.getTimeoutTimestamp()) {
                         verifierRejectedCount.incrementAndGet();
                         rejectProposal(proposal, "Timeout waiting for confirmation (" + 
@@ -2096,15 +1945,7 @@ public class ProposalQueueManagerOptimized {
                         continue;
                     }
                     
-                    // ═══════════════════════════════════════════════════════════
-                    // SECURITY CHECKPOINT 1: Ethereum Transaction Validation
-                    // ═══════════════════════════════════════════════════════════
-                    // Verify that:
-                    // - A valid Ethereum transaction exists
-                    // - Transaction has sufficient confirmations
-                    // - Payment went to correct contract
-                    // - Payment amount is sufficient
-                    // ═══════════════════════════════════════════════════════════
+                    // Checkpoint 1: confirmed payment to the configured contract, matching tx hash and kind.
                     boolean isMockMode = BlockchainConfig.getInstance().isMockMode();
                     if (!isMockMode && !proposal.getProposalId().matches("^0x[0-9a-fA-F]{64}$")) {
                         verifierRejectedCount.incrementAndGet();
@@ -2201,15 +2042,7 @@ public class ProposalQueueManagerOptimized {
                     log.debug("✅ CHECKPOINT 1 PASSED: Ethereum tx {} confirmed (block: {}, amount: {} wei)",
                         proof.getTransactionHash(), proof.getBlockNumber(), proof.getAmountWei());
                     
-                    // ═══════════════════════════════════════════════════════════
-                    // SECURITY CHECKPOINT 2: Cryptographic Signature Verification
-                    // ═══════════════════════════════════════════════════════════
-                    // Verify that:
-                    // - Signature is valid ECDSA signature
-                    // - Signature was created by the claimed wallet address
-                    // - Signature is for THIS specific write (path + message)
-                    // ═══════════════════════════════════════════════════════════
-                    
+                    // Checkpoint 2: payer and secp256k1 signer are the proposal wallet.
                     // Verify from address matches proposal wallet (payment verification)
                     if (!proof.getFromAddress().equalsIgnoreCase(proposal.getWalletAddress())) {
                         verifierRejectedCount.incrementAndGet();
@@ -2262,14 +2095,7 @@ public class ProposalQueueManagerOptimized {
                             proposal.getWalletAddress());
                     }
                     
-                    // ═══════════════════════════════════════════════════════════
-                    // SECURITY CHECKPOINT 3: Authorization Check
-                    // ═══════════════════════════════════════════════════════════
-                    // Verify that:
-                    // - Wallet has write permission for this path
-                    // - Path follows sharding rules (wallet can only write to own shard)
-                    // ═══════════════════════════════════════════════════════════
-                    
+                    // Checkpoint 3: the wallet may write this path.
                     long authStartNs = System.nanoTime();
                     Supplier<NodeState> rootSupplier = committedRoot;
                     String authError = authorizationError(rootSupplier != null ? rootSupplier.get() : null,
@@ -2283,22 +2109,8 @@ public class ProposalQueueManagerOptimized {
                     verifierAuthNanos.addAndGet(authNanos);
                     verifierLastAuthMs.set(authNanos / 1_000_000L);
                     
-                    // Additional authorization checks could go here:
-                    // - Check wallet is not banned
-                    // - Check wallet has sufficient quota
-                    // - Check path is not system-reserved
-                    
                     log.debug("✅ CHECKPOINT 3 PASSED: Wallet {} authorized for path {}",
                         proposal.getWalletAddress(), proposal.getPath());
-                    
-                    // ═══════════════════════════════════════════════════════════
-                    // ✅ ALL SECURITY CHECKS PASSED
-                    // ═══════════════════════════════════════════════════════════
-                    // This proposal is:
-                    // - Paid for (Ethereum tx confirmed)
-                    // - Cryptographically signed (proves authority)
-                    // - Authorized (wallet can write to path)
-                    // ═══════════════════════════════════════════════════════════
                     
                     long verifiedAtMs = System.currentTimeMillis();
                     proposal.setState(ProposalState.VERIFIED);
@@ -2364,28 +2176,9 @@ public class ProposalQueueManagerOptimized {
         return blobId != null && !blobId.isEmpty();
     }
     
-    // ============================================================================
-    // AGENT 3: Epoch Finalizer (PERIODIC - Wallet Batching)
-    // ============================================================================
-    
     /**
-     * Agent that checks for finalizable epochs and creates wallet-based batches.
-     * 
-     * <p>This agent runs every 1 second and:
-     * <ol>
-     *   <li>Checks for epochs that are ready for finalization (2 epochs old)</li>
-     *   <li>Groups proposals by wallet address</li>
-     *   <li>Sorts within each wallet group (by path, then timestamp)</li>
-     *   <li>Creates optimally-sized batches</li>
-     *   <li>Queues batches for Aeron sender</li>
-     * </ol>
-     * 
-     * <p><strong>Storage Benefits:</strong>
-     * <ul>
-     *   <li>Co-located Segments: All of wallet A's writes in segments 1,2,5</li>
-     *   <li>Efficient GC: Deleting a wallet removes contiguous TAR files</li>
-     *   <li>Accurate Metrics: Per-wallet fragmentation trivial to calculate</li>
-     * </ul>
+     * Drains ready per-wallet batches from the adaptive packing buffer into the release-ready queue, or into the
+     * overflow buffer while the governor throttles or Aeron backpressure is active.
      */
     private class ReleaseFinalizerAgent implements Agent {
         
@@ -2400,7 +2193,6 @@ public class ProposalQueueManagerOptimized {
                 return 0;
             }
             long now = System.currentTimeMillis();
-            captureAdaptiveReleaseDecision(now);
             int workCount = 0;
             Map<String, Object> adaptiveStats = adaptivePackingBuffer.getStatsMap();
             long pendingProposals = getLongStat(adaptiveStats, "pendingProposals");
@@ -2425,8 +2217,6 @@ public class ProposalQueueManagerOptimized {
                     decision.state(),
                     decision.action(),
                     decision.reasonCodes());
-
-                batchedProposalsSent.addAndGet(totalProposals);
             }
 
             maybeLogAdaptiveHealth(pendingProposals, adaptiveStats, now);

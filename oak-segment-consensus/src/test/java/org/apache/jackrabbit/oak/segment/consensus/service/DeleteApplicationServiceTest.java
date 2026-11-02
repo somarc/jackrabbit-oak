@@ -62,7 +62,7 @@ public class DeleteApplicationServiceTest {
             }
             return true;
         }).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> updatedHead = new AtomicReference<>();
         AtomicReference<String> durableProposal = new AtomicReference<>();
@@ -83,7 +83,7 @@ public class DeleteApplicationServiceTest {
         service.setSseEventCallback((path, wallet, org, signature) ->
             ssePayload.set(path + "|" + wallet + "|" + org + "|" + signature));
 
-        String newHead = service.applyDelete(WALLET, EXISTING_PATH, "0xsig", "proposal-1");
+        String newHead = service.applyDeleteWithAuditMetadata(WALLET, EXISTING_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal-1", null, null, null, null));
 
         assertEquals("new-head", newHead);
         assertEquals("new-head", updatedHead.get());
@@ -106,7 +106,7 @@ public class DeleteApplicationServiceTest {
             }
             return true;
         }).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
@@ -143,7 +143,7 @@ public class DeleteApplicationServiceTest {
             deferredFlush.set(invocation.getArgument(0));
             return false;
         }).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
@@ -159,7 +159,7 @@ public class DeleteApplicationServiceTest {
             }
         });
 
-        String newHead = service.applyDelete(WALLET, EXISTING_PATH, "0xsig", "proposal-deferred");
+        String newHead = service.applyDeleteWithAuditMetadata(WALLET, EXISTING_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal-deferred", null, null, null, null));
 
         assertEquals("current-head", newHead);
         assertNull(durableProposal.get());
@@ -180,7 +180,7 @@ public class DeleteApplicationServiceTest {
             ((Runnable) invocation.getArgument(0)).run();
             return true;
         }).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
@@ -196,7 +196,7 @@ public class DeleteApplicationServiceTest {
             }
         });
 
-        String newHead = service.applyDelete(WALLET, MISSING_BRANCH_PATH, "0xsig", "proposal-missing-branch");
+        String newHead = service.applyDeleteWithAuditMetadata(WALLET, MISSING_BRANCH_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal-missing-branch", null, null, null, null));
 
         assertNull(newHead);
         assertEquals("proposal-missing-branch", durableProposal.get());
@@ -213,7 +213,7 @@ public class DeleteApplicationServiceTest {
             ((Runnable) invocation.getArgument(0)).run();
             return true;
         }).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> durableProposal = new AtomicReference<>();
         AtomicReference<String> durableHead = new AtomicReference<>();
@@ -229,7 +229,7 @@ public class DeleteApplicationServiceTest {
             }
         });
 
-        String newHead = service.applyDelete(WALLET, MISSING_TARGET_PATH, "0xsig", "proposal-missing-target");
+        String newHead = service.applyDeleteWithAuditMetadata(WALLET, MISSING_TARGET_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal-missing-target", null, null, null, null));
 
         assertNull(newHead);
         assertEquals("proposal-missing-target", durableProposal.get());
@@ -242,7 +242,7 @@ public class DeleteApplicationServiceTest {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         AtomicReference<String> failedProposal = new AtomicReference<>();
         AtomicReference<String> failureMessage = new AtomicReference<>();
@@ -259,7 +259,7 @@ public class DeleteApplicationServiceTest {
         });
 
         try {
-            service.applyDelete(WALLET, "invalid", "0xsig", "proposal-fail");
+            service.applyDeleteWithAuditMetadata(WALLET, "invalid", "0xsig", MutationAuditMetadata.delete(null, null, "proposal-fail", null, null, null, null));
         } catch (RuntimeException e) {
             assertTrue(e.getMessage().contains("Failed to apply replicated delete"));
         }
@@ -274,12 +274,12 @@ public class DeleteApplicationServiceTest {
         MemoryNodeStore nodeStore = seededLargeDeleteNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
         doAnswer(invocation -> true).when(flushService).onChangeApplied(any());
-        DeleteApplicationService service = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
 
         assertTrue(nodeAt(nodeStore, LARGE_DELETE_DESCENDANT_PATH).exists());
         assertTrue(nodeAt(nodeStore, LARGE_DELETE_SIBLING_PATH).exists());
 
-        String newHead = service.applyDelete(WALLET, LARGE_DELETE_ROOT_PATH, "0xsig", "proposal-large-delete");
+        String newHead = service.applyDeleteWithAuditMetadata(WALLET, LARGE_DELETE_ROOT_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal-large-delete", null, null, null, null));
 
         assertEquals("new-head", newHead);
         assertFalse(nodeAt(nodeStore, LARGE_DELETE_ROOT_PATH).exists());
@@ -293,18 +293,18 @@ public class DeleteApplicationServiceTest {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
-        WriteApplicationService writes = new WriteApplicationService(fileStore, nodeStore, null, flushService);
-        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, nodeStore, flushService);
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> nodeStore, () -> null, flushService);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> nodeStore, flushService);
         String content = "/oak-chain/aa/bb/cc/" + WALLET + "/Acme/content/";
         for (int i = 1; i <= 3; i++) {
-            writes.applyWrite(WALLET, content + "doc-" + i, "page", "m", "0xsig", null, null, null, null, "p-" + i);
+            writes.applyWriteWithAuditMetadata(WALLET, content + "doc-" + i, "page", "m", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "p-" + i, null, null, null, null));
         }
 
-        deletes.applyDelete(WALLET, content + "doc-1", "0xsig", "d-1");
+        deletes.applyDeleteWithAuditMetadata(WALLET, content + "doc-1", "0xsig", MutationAuditMetadata.delete(null, null, "d-1", null, null, null, null));
         assertEquals(2L, walletLong(nodeStore, "contentCount"));
         assertEquals("totalWrites counts writes ever applied", 3L, walletLong(nodeStore, "totalWrites"));
 
-        deletes.applyDelete(WALLET, content + "doc-1", "0xsig", "d-2");
+        deletes.applyDeleteWithAuditMetadata(WALLET, content + "doc-1", "0xsig", MutationAuditMetadata.delete(null, null, "d-2", null, null, null, null));
         assertEquals(2L, walletLong(nodeStore, "contentCount"));
     }
 
@@ -316,8 +316,8 @@ public class DeleteApplicationServiceTest {
             .setProperty("contentCount", 0L);
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
 
-        new DeleteApplicationService(fileStoreWithHeads("prev-head", "new-head"), nodeStore,
-            mock(FileStoreFlushService.class)).applyDelete(WALLET, EXISTING_PATH, "0xsig", "d-1");
+        new DeleteApplicationService(fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore,
+            mock(FileStoreFlushService.class)).applyDeleteWithAuditMetadata(WALLET, EXISTING_PATH, "0xsig", MutationAuditMetadata.delete(null, null, "d-1", null, null, null, null));
 
         assertFalse(nodeAt(nodeStore, EXISTING_PATH).exists());
         assertEquals(0L, walletLong(nodeStore, "contentCount"));
@@ -335,12 +335,12 @@ public class DeleteApplicationServiceTest {
         }
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         DeleteApplicationService service = new DeleteApplicationService(
-            fileStoreWithHeads("prev-head", "new-head"), nodeStore, mock(FileStoreFlushService.class));
+            fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, mock(FileStoreFlushService.class));
 
         assertThrows(MutationRejectedException.class,
-            () -> service.applyDelete(FederationFixtures.STRANGER, path, "0xsig", "p-1"));
+            () -> service.applyDeleteWithAuditMetadata(FederationFixtures.STRANGER, path, "0xsig", MutationAuditMetadata.delete(null, null, "p-1", null, null, null, null)));
         assertTrue(nodeAt(nodeStore, path).exists());
-        service.applyDelete(FederationFixtures.WRITER_A, path, "0xsig", "p-2");
+        service.applyDeleteWithAuditMetadata(FederationFixtures.WRITER_A, path, "0xsig", MutationAuditMetadata.delete(null, null, "p-2", null, null, null, null));
         assertFalse(nodeAt(nodeStore, path).exists());
     }
 

@@ -20,7 +20,6 @@ import java.util.Locale;
 
 enum AdaptiveReleaseMode {
 
-    ADAPTIVE_SHADOW("adaptive-shadow"),
     ADAPTIVE_ACTIVE("adaptive-active");
 
     private final String configValue;
@@ -41,9 +40,6 @@ enum AdaptiveReleaseMode {
         String normalized = value.trim().toLowerCase(Locale.ROOT).replace('_', '-');
         if (normalized.isEmpty()) {
             return ADAPTIVE_ACTIVE;
-        }
-        if ("shadow".equals(normalized)) {
-            return ADAPTIVE_SHADOW;
         }
         if ("active".equals(normalized)) {
             return ADAPTIVE_ACTIVE;

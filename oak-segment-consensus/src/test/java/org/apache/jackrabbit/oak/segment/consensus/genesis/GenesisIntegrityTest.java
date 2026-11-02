@@ -60,6 +60,17 @@ public class GenesisIntegrityTest {
             .getProperty(GenesisDigest.PROPERTY).getValue(Type.STRING).length());
     }
 
+    /** Pins the replicated genesis seal: any change to authored genesis content must change this value on purpose. */
+    @Test
+    public void canonicalGenesisDigestIsPinned() throws Exception {
+        MemoryNodeStore store = new MemoryNodeStore();
+        NodeBuilder root = store.getRoot().builder();
+        new CanonicalGenesisContent(store, null).populate(root, 0L, CanonicalGenesisContent.DEFAULT_GENESIS_VALIDATOR_URL);
+        assertEquals("798348465246d8d28e03352e8b8a3ff09a575f22c99400c4162d2484a43f065b",
+            CanonicalGenesisContent.getGenesisNode(root.getNodeState()).getProperty(GenesisDigest.PROPERTY)
+                .getValue(Type.STRING));
+    }
+
     @Test
     public void genesisDateDoesNotDependOnJvmTimezone() throws Exception {
         TimeZone original = TimeZone.getDefault();

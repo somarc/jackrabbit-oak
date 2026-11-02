@@ -94,7 +94,13 @@ public class ReplicatedCommandRoundTripTest {
         int i = 0;
         for (String s : SAMPLES) {
             String n = (i++) + s;
-            QueuedProposal p = new QueuedProposal("pid" + n, "eth" + n, 1L, 2L, ProposalState.PENDING);
+            QueuedProposal p = new QueuedProposal("pid" + n, "eth" + n, 1L, 2L, ProposalState.PENDING) {
+                @Override
+                public MutationAuditMetadata toAuditMetadata() {
+                    return new MutationAuditMetadata(MutationAuditMetadata.Operation.WRITE, "tx" + n, "corr" + n,
+                        getProposalId(), getEthereumTxHash(), getConfirmedBlock(), 2L, 3L);
+                }
+            };
             p.setWalletAddress("0xw" + n);
             p.setPath("/p" + n);
             p.setContentType("ct" + n);
@@ -104,11 +110,7 @@ public class ReplicatedCommandRoundTripTest {
             p.setBlobId("blob" + n);
             p.setMimeType("mime" + n);
             p.setIpfsCid("cid" + n);
-            p.setTransactionId("tx" + n);
-            p.setCorrelationId("corr" + n);
             p.setConfirmedBlock(1L);
-            p.setObservedEpoch(2L);
-            p.setFinalizedEpoch(3L);
             batch.add(p);
             expected.add(String.join("|",
                 "0xw" + n, "/p" + n, "ct" + n, "msg" + n, "sig" + n, "intent" + n,

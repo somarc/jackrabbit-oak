@@ -66,10 +66,6 @@ final class AdaptiveReleaseGovernor {
         static Decision healthyDirect() {
             return HEALTHY_DIRECT;
         }
-
-        String signature() {
-            return state.name() + "|" + action.name() + "|" + String.join(",", reasonCodes);
-        }
     }
 
     private final long pressuredVerifiedFinalizedGap;

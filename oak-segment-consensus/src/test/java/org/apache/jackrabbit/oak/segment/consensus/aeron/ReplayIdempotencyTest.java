@@ -190,8 +190,8 @@ public class ReplayIdempotencyTest {
             this.store = store;
             FileStore fileStore = mock(FileStore.class, RETURNS_DEEP_STUBS);
             FileStoreFlushService flush = mock(FileStoreFlushService.class);
-            WriteApplicationService writes = new WriteApplicationService(fileStore, store, null, flush);
-            DeleteApplicationService deletes = new DeleteApplicationService(fileStore, store, flush);
+            WriteApplicationService writes = new WriteApplicationService(fileStore, () -> store, () -> null, flush);
+            DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> store, flush);
             this.dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
                 @Override
                 public void applyWrite(String walletAddress, String path, String contentType, String message,

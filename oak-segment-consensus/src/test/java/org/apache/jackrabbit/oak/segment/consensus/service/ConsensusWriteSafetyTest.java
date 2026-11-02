@@ -74,7 +74,7 @@ public class ConsensusWriteSafetyTest {
         MemoryNodeStore store = new MemoryNodeStore();
         AtomicInteger durable = new AtomicInteger();
         try (FileStoreFlushService flush = new FileStoreFlushService(fileStore)) {
-            WriteApplicationService service = new WriteApplicationService(fileStore, store, null, flush);
+            WriteApplicationService service = new WriteApplicationService(fileStore, () -> store, () -> null, flush);
             service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
                 public void onDurable(String proposalId, String head) {
                     durable.incrementAndGet();
@@ -82,9 +82,9 @@ public class ConsensusWriteSafetyTest {
                 public void onFailure(String proposalId, String error) {
                 }
             });
-            service.applyWrite(WALLET, PATH, "page", "body", "0xsig", null, null, null, null, "proposal");
+            service.applyWriteWithAuditMetadata(WALLET, PATH, "page", "body", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal", null, null, null, null));
             assertEquals(0, durable.get());
-            service.applyWrite(WALLET, PATH, "page", "body", "0xsig", null, null, null, null, "proposal");
+            service.applyWriteWithAuditMetadata(WALLET, PATH, "page", "body", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal", null, null, null, null));
             assertEquals("A replay cannot turn a failed flush into a durability vote", 0, durable.get());
             verify(fileStore, times(2)).flush();
             assertEquals(1L, node(store, WALLET_PATH).getProperty("totalWrites").getValue(Type.LONG).longValue());
@@ -104,7 +104,7 @@ public class ConsensusWriteSafetyTest {
         store.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         AtomicInteger durable = new AtomicInteger();
         try (FileStoreFlushService flush = new FileStoreFlushService(fileStore)) {
-            DeleteApplicationService service = new DeleteApplicationService(fileStore, store, flush);
+            DeleteApplicationService service = new DeleteApplicationService(fileStore, () -> store, flush);
             service.setDurabilityCallback(new WriteApplicationService.DurabilityCallback() {
                 public void onDurable(String proposalId, String head) {
                     durable.incrementAndGet();
@@ -112,10 +112,10 @@ public class ConsensusWriteSafetyTest {
                 public void onFailure(String proposalId, String error) {
                 }
             });
-            service.applyDelete(WALLET, PATH, "0xsig", "proposal");
+            service.applyDeleteWithAuditMetadata(WALLET, PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal", null, null, null, null));
             assertFalse(node(store, PATH).exists());
             assertEquals(0, durable.get());
-            service.applyDelete(WALLET, PATH, "0xsig", "proposal");
+            service.applyDeleteWithAuditMetadata(WALLET, PATH, "0xsig", MutationAuditMetadata.delete(null, null, "proposal", null, null, null, null));
             assertEquals("An absent node does not prove its deletion was flushed", 0, durable.get());
             verify(fileStore, times(2)).flush();
         }
@@ -125,7 +125,7 @@ public class ConsensusWriteSafetyTest {
     public void replicatedWriteUsesClusterTimestampForAllPersistedClockFields() {
         MemoryNodeStore store = new MemoryNodeStore();
         WriteApplicationService service = new WriteApplicationService(
-            fileStore(), store, null, mock(FileStoreFlushService.class));
+            fileStore(), () -> store, () -> null, mock(FileStoreFlushService.class));
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String wallet, String path, String contentType, String message,
@@ -170,12 +170,12 @@ public class ConsensusWriteSafetyTest {
         FileStore fileStore = fileStore();
         MemoryNodeStore store = new MemoryNodeStore();
         FileStoreFlushService flush = mock(FileStoreFlushService.class);
-        WriteApplicationService writes = new WriteApplicationService(fileStore, store, null, flush);
-        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, store, flush);
-        assertThrows(RuntimeException.class, () -> writes.applyWrite(WALLET,
+        WriteApplicationService writes = new WriteApplicationService(fileStore, () -> store, () -> null, flush);
+        DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> store, flush);
+        assertThrows(RuntimeException.class, () -> writes.applyWriteWithAuditMetadata(WALLET,
             org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent.getGenesisPath(),
-            "page", "body", "0xsig", null, null, null, null, "proposal"));
-        assertThrows(RuntimeException.class, () -> deletes.applyDelete(WALLET, "/oak-chain", "0xsig", "proposal"));
+            "page", "body", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal", null, null, null, null)));
+        assertThrows(RuntimeException.class, () -> deletes.applyDeleteWithAuditMetadata(WALLET, "/oak-chain", "0xsig", MutationAuditMetadata.delete(null, null, "proposal", null, null, null, null)));
         assertFalse(store.getRoot().hasChildNode("oak-chain"));
         org.mockito.Mockito.verifyNoInteractions(flush);
     }

@@ -39,35 +39,25 @@ public final class ProposalQueueTuningService {
         ProposalQueueTuning tuning = ProposalQueueTuning.fromConfig(config);
         ProposalQueueTuningRegistry.set(tuning);
         log.info("ProposalQueueTuningService activated");
-        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_pending_messages={} backpressure_timeout_ms={} counter_rotation_interval_ms={} required_confirmations={} release_mode={} validator_hosted_binary_upload_enabled={}",
+        log.info("QUEUE_TUNING_SOURCE source=osgi-config-admin persistence_enabled={} max_message_batch={} finalization_chunk_size={} finalization_chunk_delay_ms={} max_retry_count={} verifier_threads={} confirmation_timeout_ms={} required_confirmations={} restore_timeout_ms={} processed_retention_ms={} persistence_flush_interval_ms={} persistence_flush_batch={} max_pending_messages={} backpressure_timeout_ms={} backpressure_park_nanos={} counter_rotation_interval_ms={} release_mode={} validator_hosted_binary_upload_enabled={}",
             tuning.persistenceEnabled(),
             tuning.maxMessageBatch(),
             tuning.finalizationChunkSize(),
             tuning.finalizationChunkDelayMs(),
+            tuning.maxRetryCount(),
+            tuning.verifierThreads(),
+            tuning.confirmationTimeoutMs(),
+            tuning.requiredConfirmations(),
+            tuning.restoreTimeoutMs(),
+            tuning.processedRetentionMs(),
+            tuning.persistenceFlushIntervalMs(),
+            tuning.persistenceFlushBatch(),
             tuning.maxPendingMessages(),
             tuning.backpressureTimeoutMs(),
+            tuning.backpressureParkNanos(),
             tuning.counterRotationIntervalMs(),
-            tuning.requiredConfirmations(),
             tuning.releaseMode().configValue(),
             tuning.validatorHostedBinaryUploadEnabled());
-        log.info("  maxMessageBatch: {}", tuning.maxMessageBatch());
-        log.info("  finalizationChunkSize: {}", tuning.finalizationChunkSize());
-        log.info("  finalizationChunkDelayMs: {}", tuning.finalizationChunkDelayMs());
-        log.info("  maxRetryCount: {}", tuning.maxRetryCount());
-        log.info("  verifierThreads: {}", tuning.verifierThreads());
-        log.info("  confirmationTimeoutMs: {}", tuning.confirmationTimeoutMs());
-        log.info("  requiredConfirmations: {}", tuning.requiredConfirmations());
-        log.info("  restoreTimeoutMs: {}", tuning.restoreTimeoutMs());
-        log.info("  processedRetentionMs: {}", tuning.processedRetentionMs());
-        log.info("  persistenceEnabled: {}", tuning.persistenceEnabled());
-        log.info("  persistenceFlushIntervalMs: {}", tuning.persistenceFlushIntervalMs());
-        log.info("  persistenceFlushBatch: {}", tuning.persistenceFlushBatch());
-        log.info("  maxPendingMessages: {}", tuning.maxPendingMessages());
-        log.info("  backpressureTimeoutMs: {}", tuning.backpressureTimeoutMs());
-        log.info("  backpressureParkNanos: {}", tuning.backpressureParkNanos());
-        log.info("  counterRotationIntervalMs: {}", tuning.counterRotationIntervalMs());
-        log.info("  releaseMode: {}", tuning.releaseMode().configValue());
-        log.info("  validatorHostedBinaryUploadEnabled: {}", tuning.validatorHostedBinaryUploadEnabled());
     }
 
     @Modified

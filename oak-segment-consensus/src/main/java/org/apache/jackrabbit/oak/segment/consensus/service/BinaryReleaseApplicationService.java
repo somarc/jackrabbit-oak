@@ -16,10 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.service;
 
-import org.apache.jackrabbit.oak.api.CommitFailedException;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
-import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
-import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.jetbrains.annotations.NotNull;
@@ -28,7 +25,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -70,15 +66,8 @@ public class BinaryReleaseApplicationService {
                 released.add(blobId);
             }
         }
-        if (position != null) {
-            position.writeTo(root);
-        }
-        try {
-            nodeStore.merge(root, EmptyHook.INSTANCE, new CommitInfo("Release " + released.size() + " binaries",
-                null, Collections.singletonMap("replicated", "true")));
-        } catch (CommitFailedException e) {
-            throw new RuntimeException("Failed to commit binary release", e);
-        }
+        MutationApplySupport.mergeReplicated(nodeStore, root, "Release " + released.size() + " binaries", position,
+            "Failed to commit binary release");
         int skipped = blobIds.size() - released.size();
         log.info("Binary release marked at {}: released {}, skipped {} (absent or referenced since the mark)",
             markedAtPosition, released.size(), skipped);
@@ -111,44 +100,14 @@ public class BinaryReleaseApplicationService {
         return ids;
     }
 
-    /** What one release changed on this member; the same on every member. */
-    public static final class Result {
-        private final long markedAtPosition;
-        private final long maxLastModified;
-        private final List<String> released;
-        private final int skipped;
-        private final AppliedLogPosition position;
-
-        public Result(long markedAtPosition, long maxLastModified, @NotNull List<String> released, int skipped,
-                      @Nullable AppliedLogPosition position) {
-            this.markedAtPosition = markedAtPosition;
-            this.maxLastModified = maxLastModified;
-            this.released = Collections.unmodifiableList(new ArrayList<>(released));
-            this.skipped = skipped;
-            this.position = position;
-        }
-
-        public long markedAtPosition() {
-            return markedAtPosition;
-        }
-
-        /** Records modified after this time (ms) are not deleted; 0 for no bound. */
-        public long maxLastModified() {
-            return maxLastModified;
-        }
-
-        @NotNull
-        public List<String> released() {
-            return released;
-        }
-
-        public int skipped() {
-            return skipped;
-        }
-
-        @Nullable
-        public AppliedLogPosition position() {
-            return position;
+    /**
+     * What one release changed on this member; the same on every member. {@code maxLastModified}: records
+     * modified after this time (ms) are not deleted; 0 for no bound.
+     */
+    public record Result(long markedAtPosition, long maxLastModified, @NotNull List<String> released, int skipped,
+                         @Nullable AppliedLogPosition position) {
+        public Result {
+            released = List.copyOf(released);
         }
     }
 }

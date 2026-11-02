@@ -110,10 +110,6 @@ final class ProposalPersistenceStore {
         private final String contentType;
         private final String signature;
         private final long epoch;
-        private final Long observedEpoch;
-        private final Long finalizedEpoch;
-        private final String transactionId;
-        private final String correlationId;
         private final org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier;
         private final String intentToken;
         private final String blobId;
@@ -144,10 +140,6 @@ final class ProposalPersistenceStore {
                                String contentType,
                                String signature,
                                long epoch,
-                               Long observedEpoch,
-                               Long finalizedEpoch,
-                               String transactionId,
-                               String correlationId,
                                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
                                String intentToken,
                                String blobId,
@@ -176,10 +168,6 @@ final class ProposalPersistenceStore {
             this.contentType = contentType;
             this.signature = signature;
             this.epoch = epoch;
-            this.observedEpoch = observedEpoch;
-            this.finalizedEpoch = finalizedEpoch;
-            this.transactionId = transactionId;
-            this.correlationId = correlationId;
             this.tier = tier;
             this.intentToken = intentToken;
             this.blobId = blobId;
@@ -212,10 +200,6 @@ final class ProposalPersistenceStore {
                 proposal.getContentType(),
                 proposal.getSignature(),
                 proposal.getEpoch(),
-                proposal.getObservedEpoch(),
-                proposal.getFinalizedEpoch(),
-                proposal.getTransactionId(),
-                proposal.getCorrelationId(),
                 proposal.getTier(),
                 proposal.getIntentToken(),
                 proposal.getBlobId(),
@@ -252,10 +236,6 @@ final class ProposalPersistenceStore {
             proposal.setContentType(contentType);
             proposal.setSignature(signature);
             proposal.setEpoch(epoch);
-            proposal.setObservedEpoch(observedEpoch);
-            proposal.setFinalizedEpoch(finalizedEpoch);
-            proposal.setTransactionId(transactionId);
-            proposal.setCorrelationId(correlationId);
             proposal.setTier(tier);
             proposal.setIntentToken(intentToken);
             proposal.setBlobId(blobId);
