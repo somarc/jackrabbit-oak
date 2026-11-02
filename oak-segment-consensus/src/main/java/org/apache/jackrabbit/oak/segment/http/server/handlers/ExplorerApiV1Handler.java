@@ -281,10 +281,6 @@ public class ExplorerApiV1Handler {
         }
     }
 
-    public void handleContentTree(HttpServletResponse response, String clusterId, String requestedPath) throws IOException {
-        handleContentTree(response, clusterId, requestedPath, 0, DEFAULT_TREE_PAGE_SIZE);
-    }
-
     /**
      * Content tree with offset paging over visible children. Pages follow the
      * node's child iteration order at read time, so writes between page
@@ -634,30 +630,13 @@ public class ExplorerApiV1Handler {
     }
 
     private String stringifyPropertyValue(PropertyState property) {
-        if (property.getType() == Type.BINARY) {
-            return "[Binary: " + property.size() + " bytes]";
-        }
-        if (property.getType() == Type.BOOLEAN) {
-            return String.valueOf(property.getValue(Type.BOOLEAN));
-        }
-        if (property.getType() == Type.LONG) {
-            return String.valueOf(property.getValue(Type.LONG));
-        }
-        if (property.getType() == Type.DOUBLE) {
-            return String.valueOf(property.getValue(Type.DOUBLE));
-        }
-        if (property.getType() == Type.DATE) {
-            return String.valueOf(property.getValue(Type.DATE));
-        }
-        return String.valueOf(property.getValue(Type.STRING));
+        return property.getType() == Type.BINARY
+            ? "[Binary: " + property.size() + " bytes]" : property.getValue(Type.STRING);
     }
 
     private String stringifyPropertyValue(PropertyState property, int index) {
-        try {
-            return String.valueOf(property.getValue(Type.STRING, index));
-        } catch (Exception ignored) {
-            return String.valueOf(property.getValue(Type.STRINGS).iterator().next());
-        }
+        return property.getType() == Type.BINARIES
+            ? "[Binary: " + property.size(index) + " bytes]" : property.getValue(Type.STRING, index);
     }
 
     private Map<String, Object> findNearestWriteMetadata(String path) {

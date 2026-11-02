@@ -1008,8 +1008,9 @@ public class RequestRouterTest {
     @Test
     public void testEventStreamRouteReplaysBufferedEvents() throws Exception {
         withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+            ServerContext context = newContext();
+            RequestRouter router = new RequestRouter(context);
+            context.eventBroadcaster.broadcast(ContentEvent.builder()
                 .id("evt-1")
                 .timestamp(100L)
                 .path("/content/doc-1")
@@ -1036,8 +1037,9 @@ public class RequestRouterTest {
     @Test
     public void testOpsEventStreamRouteUsesOpsEnvelope() throws Exception {
         withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+            ServerContext context = newContext();
+            RequestRouter router = new RequestRouter(context);
+            context.eventBroadcaster.broadcast(ContentEvent.builder()
                 .id("10")
                 .type(ContentEvent.EventType.CONSENSUS)
                 .action(ContentEvent.Action.LEADER_CHANGE)
@@ -1321,10 +1323,10 @@ public class RequestRouterTest {
             router.route(request, response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": \"committed-aeron-head\""));
-            assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
-            assertTrue(body.toString().contains("\"committedEpoch\": 11"));
+            assertTrue(body.toString().contains("\"latestHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":\"committed-aeron-head\""));
+            assertTrue(body.toString().contains("\"latestEpochSeen\":12"));
+            assertTrue(body.toString().contains("\"committedEpoch\":11"));
         });
     }
 
@@ -1448,8 +1450,8 @@ public class RequestRouterTest {
             router.route(request, response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"fallback-file-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": null"));
+            assertTrue(body.toString().contains("\"latestHead\":\"fallback-file-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":null"));
         });
     }
 
@@ -1469,10 +1471,10 @@ public class RequestRouterTest {
             router.route(request("GET", "/v1/head"), response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": null"));
-            assertFalse(body.toString().contains("\"committedHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
+            assertTrue(body.toString().contains("\"latestHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":null"));
+            assertFalse(body.toString().contains("\"committedHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"latestEpochSeen\":12"));
             assertFalse(body.toString().contains("\"committedEpoch\""));
         });
     }

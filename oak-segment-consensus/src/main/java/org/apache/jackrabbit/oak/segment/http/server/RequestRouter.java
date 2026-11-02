@@ -44,7 +44,6 @@ import org.apache.jackrabbit.oak.segment.http.server.handlers.RegistrationHandle
 import org.apache.jackrabbit.oak.segment.http.server.handlers.WalletQueryHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.WriteProposalHandler;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
-import org.apache.jackrabbit.oak.segment.http.server.util.FormatUtils;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.segment.http.server.sse.EventBroadcaster;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -234,7 +233,7 @@ public class RequestRouter implements AutoCloseable {
         prefix("GET", "/v1/binary/download-url/", (req, res, path) ->
             handleDownloadUrl(req, res, path.substring("/v1/binary/download-url/".length())));
 
-        get("/v1/head", (req, res, path) -> handleHead(res));
+        get("/v1/head", (req, res, path) -> healthHandler.handleHead(res));
         get("/v1/federation", (req, res, path) -> handleFederation(res));
         get("/v1/gc/status", (req, res, path) ->
             JsonOutputUtil.write(res, HttpServletResponse.SC_OK, context.gcStatusPayload()));
@@ -541,7 +540,6 @@ public class RequestRouter implements AutoCloseable {
         return false;
     }
 
-    // HEAD from AeronConsensusEngine (tracks latest HEAD correctly), FileStore as fallback.
     /** The committed charter and directory with this member's federation status; public by design. */
     private void handleFederation(HttpServletResponse response) throws IOException {
         NodeState root = context.authoritativeRoot();
@@ -557,41 +555,6 @@ public class RequestRouter implements AutoCloseable {
         payload.put("status", coordinator != null ? coordinator.getStatus().toMap() : null);
         payload.put("gc", context.gcFederationPayload());
         JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
-    }
-
-    private void handleHead(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-
-        String latestHead = null;
-        String committedHead = null;
-        int latestEpochSeen = -1;
-        int committedEpoch = -1;
-        if (context.aeronConsensusEngine != null) {
-            latestHead = context.aeronConsensusEngine.getLatestHead();
-            committedHead = context.aeronConsensusEngine.getCommittedHead();
-            latestEpochSeen = context.aeronConsensusEngine.getLatestEpochSeen();
-            committedEpoch = context.aeronConsensusEngine.getLastCommittedEpoch();
-        }
-        if (latestHead == null || latestHead.isEmpty()) {
-            latestHead = context.fileStore.getHead().getRecordId().toString10();
-        }
-
-        StringBuilder json = new StringBuilder("{\n");
-        json.append("  \"latestHead\": \"").append(FormatUtils.escapeJson(latestHead)).append("\",\n");
-        if (committedHead == null || committedHead.isEmpty()) {
-            json.append("  \"committedHead\": null");
-        } else {
-            json.append("  \"committedHead\": \"").append(FormatUtils.escapeJson(committedHead)).append("\"");
-        }
-        if (latestEpochSeen >= 0) {
-            json.append(",\n  \"latestEpochSeen\": ").append(latestEpochSeen);
-        }
-        if (committedEpoch >= 0) {
-            json.append(",\n  \"committedEpoch\": ").append(committedEpoch);
-        }
-        json.append("\n}\n");
-        response.getWriter().write(json.toString());
     }
 
     private static int parseIntParameter(String value, int fallback) {
@@ -634,9 +597,6 @@ public class RequestRouter implements AutoCloseable {
         if (path.startsWith("/health")) {
             return true;
         }
-        if ("/v1/ops/snapshots/health".equals(path) && "GET".equals(method)) {
-            return true;
-        }
         if ("/journal.log".equals(path) && "GET".equals(method)) {
             return true;
         }
@@ -650,15 +610,6 @@ public class RequestRouter implements AutoCloseable {
             && ("GET".equals(method) || "HEAD".equals(method));
     }
     
-    /**
-     * Get the event broadcaster (for emitting SSE events from other components).
-     * 
-     * @return the event broadcaster
-     */
-    public EventBroadcaster getEventBroadcaster() {
-        return eventBroadcaster;
-    }
-
     @Override
     public void close() {
         try {

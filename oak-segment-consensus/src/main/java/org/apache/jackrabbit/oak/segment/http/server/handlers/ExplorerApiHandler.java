@@ -146,14 +146,6 @@ public class ExplorerApiHandler {
                             } catch (Exception blobEx) {
                                 value = "[Binary: " + binarySize + " bytes]";
                             }
-                        } else if (prop.getType() == Type.BOOLEAN) {
-                            value = String.valueOf(prop.getValue(Type.BOOLEAN));
-                        } else if (prop.getType() == Type.LONG) {
-                            value = String.valueOf(prop.getValue(Type.LONG));
-                        } else if (prop.getType() == Type.DOUBLE) {
-                            value = String.valueOf(prop.getValue(Type.DOUBLE));
-                        } else if (prop.getType() == Type.DATE) {
-                            value = String.valueOf(prop.getValue(Type.DATE));
                         } else {
                             value = prop.getValue(Type.STRING);
                         }
