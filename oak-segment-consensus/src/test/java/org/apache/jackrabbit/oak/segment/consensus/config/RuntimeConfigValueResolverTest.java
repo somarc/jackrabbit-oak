@@ -87,6 +87,17 @@ public class RuntimeConfigValueResolverTest {
     }
 
     @Test
+    public void testInvalidOrOutOfRangeNumbersFallBackToDefault() {
+        System.setProperty(PROP_INT, "not-a-number");
+        assertEquals(7, RuntimeConfigValueResolver.readInt(PROP_INT, 7));
+        assertEquals(7L, RuntimeConfigValueResolver.readLongEnvFirst(PROP_INT, "OAK_TEST_UNSET", 7L));
+
+        System.setProperty(PROP_INT, "3000000000");
+        assertEquals(7, RuntimeConfigValueResolver.readInt(PROP_INT, 7));
+        assertEquals(3_000_000_000L, RuntimeConfigValueResolver.readLong(PROP_INT, 7L));
+    }
+
+    @Test
     public void testConfiguredValueReflectsOverrideAndSystemProperty() {
         assertFalse(RuntimeConfigValueResolver.hasConfiguredValue(PROP_VALUE));
 

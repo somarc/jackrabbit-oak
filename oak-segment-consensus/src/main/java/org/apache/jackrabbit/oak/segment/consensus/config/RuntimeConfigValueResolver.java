@@ -16,11 +16,16 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Resolves runtime config values using OSGi override, then system property,
  * then optional environment variable, then default.
  */
 public final class RuntimeConfigValueResolver {
+
+    private static final Logger log = LoggerFactory.getLogger(RuntimeConfigValueResolver.class);
 
     private RuntimeConfigValueResolver() {
     }
@@ -75,23 +80,23 @@ public final class RuntimeConfigValueResolver {
     }
 
     public static int readInt(String sysProp, int defaultValue) {
-        return parseInt(readString(sysProp, (String) null), defaultValue);
+        return parseInt(sysProp, readString(sysProp, (String) null), defaultValue);
     }
 
     public static int readInt(String sysProp, String envVar, int defaultValue) {
-        return parseInt(readString(sysProp, envVar, null), defaultValue);
+        return parseInt(sysProp, readString(sysProp, envVar, null), defaultValue);
     }
 
     public static long readLong(String sysProp, long defaultValue) {
-        return parseLong(readString(sysProp, (String) null), defaultValue);
+        return parseLong(sysProp, readString(sysProp, (String) null), defaultValue);
     }
 
     public static long readLong(String sysProp, String envVar, long defaultValue) {
-        return parseLong(readString(sysProp, envVar, null), defaultValue);
+        return parseLong(sysProp, readString(sysProp, envVar, null), defaultValue);
     }
 
     public static long readLongEnvFirst(String sysProp, String envVar, long defaultValue) {
-        return parseLong(readStringEnvFirst(sysProp, envVar, null), defaultValue);
+        return parseLong(sysProp, readStringEnvFirst(sysProp, envVar, null), defaultValue);
     }
 
     public static boolean hasConfiguredValue(String sysProp) {
@@ -114,25 +119,27 @@ public final class RuntimeConfigValueResolver {
         return value != null && !value.trim().isEmpty();
     }
 
-    private static int parseInt(String raw, int defaultValue) {
-        if (!hasText(raw)) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
+    private static int parseInt(String key, String raw, int defaultValue) {
+        return (int) parseLong(key, raw, defaultValue, Integer.MIN_VALUE, Integer.MAX_VALUE);
     }
 
-    private static long parseLong(String raw, long defaultValue) {
+    private static long parseLong(String key, String raw, long defaultValue) {
+        return parseLong(key, raw, defaultValue, Long.MIN_VALUE, Long.MAX_VALUE);
+    }
+
+    private static long parseLong(String key, String raw, long defaultValue, long min, long max) {
         if (!hasText(raw)) {
             return defaultValue;
         }
         try {
-            return Long.parseLong(raw.trim());
+            long value = Long.parseLong(raw.trim());
+            if (value >= min && value <= max) {
+                return value;
+            }
         } catch (NumberFormatException ignored) {
-            return defaultValue;
+            // reported below
         }
+        log.warn("Invalid numeric config {}='{}', using default {}", key, raw, defaultValue);
+        return defaultValue;
     }
 }
