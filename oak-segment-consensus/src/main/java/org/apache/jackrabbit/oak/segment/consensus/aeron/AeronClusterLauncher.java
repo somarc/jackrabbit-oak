@@ -66,7 +66,7 @@ public class AeronClusterLauncher {
     private static final String PUBLICATION_TERM_BUFFER_LENGTH_PROPERTY = "oak.cluster.publication.term.buffer.length.bytes";
     private static final String CLUSTER_TERM_LENGTH_PROPERTY = "oak.cluster.term.length.bytes";
     // Our only ingress clients are internal and send a keepalive every second.
-    private static final long DEFAULT_SESSION_TIMEOUT_SECONDS = 30;
+    public static final long DEFAULT_SESSION_TIMEOUT_SECONDS = 30;
     private static final String SESSION_TIMEOUT_SECONDS_PROPERTY = "oak.cluster.session.timeout.seconds";
     private static final String SESSION_TIMEOUT_MINUTES_PROPERTY = "oak.cluster.session.timeout.minutes";
     /**

@@ -98,7 +98,8 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/v1/consensus/status\""));
         assertTrue(json.contains("\"path\":\"/v1/aeron/cluster-state\""));
         assertTrue(json.contains("\"path\":\"/v1/events/stats\""));
-        assertTrue(json.contains("\"path\":\"/v1/gc/status\""));
+        assertTrue(json.contains("\"path\":\"/v1/gc/status\",\"description\":\"Segment and binary GC state\",\"category\":\"Storage\","
+            + "\"surfaceClass\":\"source\",\"upstreamAllowed\":true,\"contractVersion\":\"gc.status.v2\",\"replacement\":\"/ops/v1/gc/status\""));
         assertFalse(json.contains("\"path\":\"/v1/gc/estimate\""));
         assertFalse(json.contains("\"path\":\"/v1/gc/trigger\""));
         assertFalse(json.contains("\"path\":\"/v1/gc/vote\""));

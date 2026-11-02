@@ -18,7 +18,7 @@ package org.apache.jackrabbit.oak.segment.consensus.queue;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 
-record ProposalQueueTuning(long confirmationTimeoutMs,
+public record ProposalQueueTuning(long confirmationTimeoutMs,
                            int requiredConfirmations,
                            long restoreTimeoutMs,
                            int maxMessageBatch,
@@ -41,34 +41,34 @@ record ProposalQueueTuning(long confirmationTimeoutMs,
                            long payloadSpillMaxBytes,
                            long hardMaxPendingProposals,
                            String payloadSpillDir) {
-    ProposalQueueTuning {
+    public ProposalQueueTuning {
         releaseMode = releaseMode != null ? releaseMode : AdaptiveReleaseMode.ADAPTIVE_ACTIVE;
         payloadSpillDir = payloadSpillDir != null ? payloadSpillDir : "";
     }
 
-    static final long DEFAULT_CONFIRMATION_TIMEOUT_MS = 300_000;
+    public static final long DEFAULT_CONFIRMATION_TIMEOUT_MS = 300_000;
     /** 0 selects the blockchain mode's default (local 1, sepolia 3, mainnet 1 at or below the finalized tag). */
-    static final int DEFAULT_REQUIRED_CONFIRMATIONS = 0;
-    static final int DEFAULT_MAX_MESSAGE_BATCH = 10;
-    static final int DEFAULT_MAX_RETRY_COUNT = 5;
-    static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
-    static final long DEFAULT_FINALIZATION_CHUNK_DELAY_MS = 0L;
-    static final int DEFAULT_VERIFIER_THREADS = 1;
-    static final long DEFAULT_PROCESSED_RETENTION_MS = 10 * 60 * 1000L;
-    static final boolean DEFAULT_PERSISTENCE_ENABLED = true;
-    static final long DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS = 250L;
-    static final int DEFAULT_PERSISTENCE_FLUSH_BATCH = 100;
-    static final long DEFAULT_MAX_PENDING_MESSAGES = 10_000L;
-    static final long DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30_000L;
-    static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
-    static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
-    static final String DEFAULT_RELEASE_MODE = "adaptive-active";
-    static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
-    static final long DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8L * 1024L;
-    static final long DEFAULT_PAYLOAD_SPILL_SOFT_PENDING = DEFAULT_MAX_PENDING_MESSAGES;
-    static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;
-    static final long DEFAULT_HARD_MAX_PENDING_PROPOSALS = DEFAULT_MAX_PENDING_MESSAGES * 2L;
-    static final String DEFAULT_PAYLOAD_SPILL_DIR = "";
+    public static final int DEFAULT_REQUIRED_CONFIRMATIONS = 0;
+    public static final int DEFAULT_MAX_MESSAGE_BATCH = 10;
+    public static final int DEFAULT_MAX_RETRY_COUNT = 5;
+    public static final int DEFAULT_FINALIZATION_CHUNK_SIZE = 3;
+    public static final long DEFAULT_FINALIZATION_CHUNK_DELAY_MS = 0L;
+    public static final int DEFAULT_VERIFIER_THREADS = 1;
+    public static final long DEFAULT_PROCESSED_RETENTION_MS = 10 * 60 * 1000L;
+    public static final boolean DEFAULT_PERSISTENCE_ENABLED = true;
+    public static final long DEFAULT_PERSISTENCE_FLUSH_INTERVAL_MS = 250L;
+    public static final int DEFAULT_PERSISTENCE_FLUSH_BATCH = 100;
+    public static final long DEFAULT_MAX_PENDING_MESSAGES = 10_000L;
+    public static final long DEFAULT_BACKPRESSURE_TIMEOUT_MS = 30_000L;
+    public static final long DEFAULT_BACKPRESSURE_PARK_NANOS = 1_000_000L;
+    public static final long DEFAULT_COUNTER_ROTATION_INTERVAL_MS = 24L * 60L * 60L * 1000L;
+    public static final String DEFAULT_RELEASE_MODE = "adaptive-active";
+    public static final boolean DEFAULT_VALIDATOR_HOSTED_BINARY_UPLOAD_ENABLED = true;
+    public static final long DEFAULT_PAYLOAD_INLINE_MAX_BYTES = 8L * 1024L;
+    public static final long DEFAULT_PAYLOAD_SPILL_SOFT_PENDING = DEFAULT_MAX_PENDING_MESSAGES;
+    public static final long DEFAULT_PAYLOAD_SPILL_MAX_BYTES = 2L * 1024L * 1024L * 1024L;
+    public static final long DEFAULT_HARD_MAX_PENDING_PROPOSALS = DEFAULT_MAX_PENDING_MESSAGES * 2L;
+    public static final String DEFAULT_PAYLOAD_SPILL_DIR = "";
 
     static ProposalQueueTuning fromSystemProperties() {
         long confirmationTimeoutMs = Long.getLong(

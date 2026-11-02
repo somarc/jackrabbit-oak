@@ -115,12 +115,14 @@ public class ProposalQueueTuningTest {
     }
 
     @Test
-    public void testRetiredShadowModeResolvesToActive() {
-        System.setProperty("oak.proposal.release.mode", "adaptive-shadow");
+    public void testAnyOtherReleaseModeResolvesToActive() {
+        for (String value : new String[] {"adaptive-shadow", "no-such-mode"}) {
+            System.setProperty("oak.proposal.release.mode", value);
 
-        ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
+            ProposalQueueTuning tuning = ProposalQueueTuning.fromSystemProperties();
 
-        assertEquals(AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
+            assertEquals(value, AdaptiveReleaseMode.ADAPTIVE_ACTIVE, tuning.releaseMode());
+        }
     }
 
     @Test
