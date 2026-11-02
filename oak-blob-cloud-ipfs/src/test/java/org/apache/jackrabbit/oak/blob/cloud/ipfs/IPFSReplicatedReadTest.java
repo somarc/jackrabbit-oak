@@ -27,6 +27,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,7 +75,6 @@ public class IPFSReplicatedReadTest {
             }
             IPFSDataStore readerStore = (IPFSDataStore) reader.getDataStore();
             assertEquals(writerStore.getCID(blobId), readerStore.getCID(blobId));
-            assertTrue(readerStore.getAllCIDMappings().containsKey(identifier));
             reader.close();
         }
         isolated.close();
@@ -82,9 +82,11 @@ public class IPFSReplicatedReadTest {
     }
 
     private DataStoreBlobStore blobStore(int node, boolean withResolver) throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty(IpfsClientSettings.ENDPOINT, NODES.kuboRpcMultiaddr(node));
+        properties.setProperty("ipfsFilesRoot", "/oak/validator-" + node + "-" + UUID.randomUUID());
         IPFSDataStore dataStore = new IPFSDataStore();
-        dataStore.setIpfsApiEndpoint(NODES.kuboRpcMultiaddr(node));
-        dataStore.setIpfsFilesRoot("/oak/validator-" + node + "-" + UUID.randomUUID());
+        dataStore.setProperties(properties);
         dataStore.setCacheSize(0);
         if (withResolver) {
             dataStore.setCidResolver(replicatedIndex::get);

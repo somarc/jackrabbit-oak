@@ -106,26 +106,6 @@ public class ValidatorLifecycleManagerTest {
             }
 
             @Override
-            public boolean consensus_enabled() {
-                return true;
-            }
-
-            @Override
-            public String consensus_mode() {
-                return "aeron";
-            }
-
-            @Override
-            public String consensus_self_url() {
-                return "";
-            }
-
-            @Override
-            public String consensus_peers() {
-                return "";
-            }
-
-            @Override
             public Class<? extends java.lang.annotation.Annotation> annotationType() {
                 return ValidatorConfig.class;
             }

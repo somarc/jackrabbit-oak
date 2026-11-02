@@ -30,16 +30,4 @@ public @interface ValidatorConfig {
 
     @AttributeDefinition(name = "Store Directory", description = "Segment store directory")
     String store_directory() default "/var/oak-chain/segmentstore-composite-mount-oak-chain";
-
-    @AttributeDefinition(name = "Consensus Enabled", description = "Enable Aeron consensus")
-    boolean consensus_enabled() default true;
-
-    @AttributeDefinition(name = "Consensus Mode", description = "Consensus mode (aeron)")
-    String consensus_mode() default "aeron";
-
-    @AttributeDefinition(name = "Self URL", description = "Validator URL (e.g., http://validator-0:8090)")
-    String consensus_self_url() default "";
-
-    @AttributeDefinition(name = "Peer URLs", description = "Comma-separated peer URLs")
-    String consensus_peers() default "";
 }

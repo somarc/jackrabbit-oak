@@ -29,8 +29,8 @@ import java.util.Properties;
  * {@link IPFSBackend}.
  *
  * <p>This class is responsible for wiring datastore configuration into the
- * backend and exposing IPFS-specific convenience accessors such as the
- * configured endpoint, IPFS Files root, and current CID mappings. Blobs smaller than
+ * backend and exposing IPFS-specific accessors such as CID lookup, health and
+ * statistics. Blobs smaller than
  * {@link #getMinRecordLength()} stay inline in Oak segments, while larger
  * binaries are delegated to IPFS.</p>
  *
@@ -42,8 +42,6 @@ import java.util.Properties;
  * @see org.apache.jackrabbit.oak.plugins.blob.AbstractSharedCachingDataStore
  */
 public class IPFSDataStore extends AbstractSharedCachingDataStore {
-
-    private static final String DEFAULT_IPFS_FILES_ROOT = "/oak/ipfs";
 
     protected Properties properties;
 
@@ -182,72 +180,6 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
     }
     
     /**
-     * Sets the IPFS API endpoint directly.
-     *
-     * <p>The property is retained for later backend creation and also pushed to
-     * the live backend when one already exists.</p>
-     *
-     * @param endpoint IPFS HTTP API multiaddr (for example
-     *                 {@code /ip4/127.0.0.1/tcp/5001})
-     */
-    public void setIpfsApiEndpoint(String endpoint) {
-        if (properties == null) {
-            properties = new Properties();
-        }
-        properties.setProperty("ipfsApiEndpoint", endpoint);
-        
-        if (ipfsBackend != null) {
-            ipfsBackend.setIpfsApiEndpoint(endpoint);
-        }
-    }
-    
-    /**
-     * Returns the configured IPFS API endpoint.
-     *
-     * @return the live backend endpoint when initialized, otherwise the stored
-     *         configuration value
-     */
-    public String getIpfsApiEndpoint() {
-        if (ipfsBackend != null) {
-            return ipfsBackend.getIpfsApiEndpoint();
-        }
-        return properties != null ? properties.getProperty("ipfsApiEndpoint") : null;
-    }
-
-    /**
-     * Sets the IPFS Files namespace root used for durable Oak metadata.
-     *
-     * <p>Use a distinct root when multiple Oak repositories share one IPFS
-     * repository to avoid collisions between CID mappings and metadata.</p>
-     *
-     * @param root MFS root path, for example {@code /oak/ipfs}
-     */
-    public void setIpfsFilesRoot(String root) {
-        if (properties == null) {
-            properties = new Properties();
-        }
-        String normalizedRoot = normalizeIpfsFilesRoot(root);
-        properties.setProperty("ipfsFilesRoot", normalizedRoot);
-
-        if (ipfsBackend != null) {
-            ipfsBackend.setIpfsFilesRoot(normalizedRoot);
-        }
-    }
-
-    /**
-     * Returns the configured IPFS Files namespace root.
-     *
-     * @return the live backend root when initialized, otherwise the stored
-     *         configuration value
-     */
-    public String getIpfsFilesRoot() {
-        if (ipfsBackend != null) {
-            return ipfsBackend.getIpfsFilesRoot();
-        }
-        return properties != null ? normalizeIpfsFilesRoot(properties.getProperty("ipfsFilesRoot")) : null;
-    }
-    
-    /**
      * Returns the IPFS CID for an Oak blob identifier.
      *
      * <p>If the blob identifier contains the Oak size suffix (for example
@@ -304,31 +236,5 @@ public class IPFSDataStore extends AbstractSharedCachingDataStore {
             throw new DataStoreException("IPFS DataStore is not initialized");
         }
         return ipfsBackend.verify(limit);
-    }
-
-    /**
-     * Returns a snapshot of the backend's current identifier-to-CID mappings.
-     *
-     * @return mapping of Oak blob IDs to IPFS CIDs
-     */
-    public java.util.Map<String, String> getAllCIDMappings() {
-        if (ipfsBackend == null) {
-            return java.util.Collections.emptyMap();
-        }
-        return ipfsBackend.getAllCIDMappings();
-    }
-
-    private static String normalizeIpfsFilesRoot(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return DEFAULT_IPFS_FILES_ROOT;
-        }
-        String normalized = value.trim();
-        if (!normalized.startsWith("/")) {
-            normalized = "/" + normalized;
-        }
-        while (normalized.length() > 1 && normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
     }
 }

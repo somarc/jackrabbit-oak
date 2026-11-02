@@ -49,8 +49,8 @@ record IpfsClusterSettings(String endpoint, String authorization, int replicatio
     static final String UNPIN_ON_DELETE = "ipfsClusterUnpinOnDelete";
 
     IpfsClusterSettings {
-        endpoint = blankToNull(endpoint);
-        authorization = blankToNull(authorization);
+        endpoint = IpfsClientSettings.blankToNull(endpoint);
+        authorization = IpfsClientSettings.blankToNull(authorization);
         if (replicationMin < 1 || replicationMax < replicationMin) {
             throw new IllegalArgumentException(
                 "IPFS Cluster replication needs 1 <= ipfsClusterReplicationMin <= ipfsClusterReplicationMax");
@@ -66,12 +66,12 @@ record IpfsClusterSettings(String endpoint, String authorization, int replicatio
 
     static IpfsClusterSettings fromProperties(Map<?, ?> properties) {
         return new IpfsClusterSettings(
-            string(properties, ENDPOINT),
-            string(properties, AUTHORIZATION),
-            toInt(REPLICATION_MIN, number(properties, REPLICATION_MIN, DEFAULT_REPLICATION_MIN)),
-            toInt(REPLICATION_MAX, number(properties, REPLICATION_MAX, DEFAULT_REPLICATION_MAX)),
-            Duration.ofMillis(number(properties, PIN_TIMEOUT_MILLIS, DEFAULT_PIN_TIMEOUT.toMillis())),
-            Boolean.parseBoolean(blankToNull(string(properties, UNPIN_ON_DELETE))));
+            IpfsClientSettings.string(properties, ENDPOINT),
+            IpfsClientSettings.string(properties, AUTHORIZATION),
+            toInt(REPLICATION_MIN, IpfsClientSettings.number(properties, REPLICATION_MIN, DEFAULT_REPLICATION_MIN)),
+            toInt(REPLICATION_MAX, IpfsClientSettings.number(properties, REPLICATION_MAX, DEFAULT_REPLICATION_MAX)),
+            Duration.ofMillis(IpfsClientSettings.number(properties, PIN_TIMEOUT_MILLIS, DEFAULT_PIN_TIMEOUT.toMillis())),
+            Boolean.parseBoolean(IpfsClientSettings.blankToNull(IpfsClientSettings.string(properties, UNPIN_ON_DELETE))));
     }
 
     static IpfsClusterSettings disabled() {
@@ -103,26 +103,5 @@ record IpfsClusterSettings(String endpoint, String authorization, int replicatio
             throw new IllegalArgumentException(key + " is out of range");
         }
         return (int) value;
-    }
-
-    private static String string(Map<?, ?> properties, String key) {
-        Object value = properties.get(key);
-        return value == null ? null : value.toString();
-    }
-
-    private static long number(Map<?, ?> properties, String key, long defaultValue) {
-        String value = blankToNull(string(properties, key));
-        if (value == null) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(key + " must be a number, not " + value, e);
-        }
-    }
-
-    private static String blankToNull(String value) {
-        return value == null || value.trim().isEmpty() ? null : value.trim();
     }
 }

@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.util;
 
+import org.apache.jackrabbit.oak.commons.json.JsopBuilder;
+
 /**
  * Utility methods for formatting and escaping strings.
  * 
@@ -46,14 +48,12 @@ public class FormatUtils {
     }
     
     /**
-     * Escape JSON string.
+     * Escape JSON string (RFC 7159: quotes, backslash and all control characters).
      */
     public static String escapeJson(String text) {
         if (text == null) return "";
-        return text.replace("\\", "\\\\")
-                   .replace("\"", "\\\"")
-                   .replace("\n", "\\n")
-                   .replace("\r", "\\r")
-                   .replace("\t", "\\t");
+        StringBuilder escaped = new StringBuilder(text.length());
+        JsopBuilder.escape(text, escaped);
+        return escaped.toString();
     }
 }

@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server;
 
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.ConfigurationPolicy;
@@ -37,16 +38,13 @@ public final class RateLimiterTuningService {
     @Activate
     protected void activate(RateLimiterTuningConfig config) {
         applyConfig(config);
-        RateLimiterTuningSourceRegistry.markOsgiSource();
-        log.info("RATE_LIMIT_TUNING_SOURCE source=osgi-config-admin enabled={} rps={} burst={} globalRps={} writeRps={} warnLoggingEnabled={} warnLogIntervalMs={} warnLogSampleSize={}",
+        RuntimePropertySourceRegistry.markSource(RateLimiterTuningIntrospection.COMPONENT, "osgi-config-admin");
+        log.info("RATE_LIMIT_TUNING_SOURCE source=osgi-config-admin enabled={} rps={} burst={} globalRps={} writeRps={}",
             config.enabled(),
             config.requests_per_second(),
             config.burst_size(),
             config.global_rps(),
-            config.write_rps(),
-            config.warn_logging_enabled(),
-            config.warn_log_interval_ms(),
-            config.warn_log_sample_size());
+            config.write_rps());
     }
 
     @Modified
@@ -61,8 +59,5 @@ public final class RateLimiterTuningService {
         System.setProperty(RateLimiter.PROP_BURST_SIZE, String.valueOf(config.burst_size()));
         System.setProperty(RateLimiter.PROP_GLOBAL_RPS, String.valueOf(config.global_rps()));
         System.setProperty(RateLimiter.PROP_WRITE_RPS, String.valueOf(config.write_rps()));
-        System.setProperty(RateLimiter.PROP_WARN_LOGGING_ENABLED, String.valueOf(config.warn_logging_enabled()));
-        System.setProperty(RateLimiter.PROP_WARN_LOG_INTERVAL_MS, String.valueOf(config.warn_log_interval_ms()));
-        System.setProperty(RateLimiter.PROP_WARN_LOG_SAMPLE_SIZE, String.valueOf(config.warn_log_sample_size()));
     }
 }

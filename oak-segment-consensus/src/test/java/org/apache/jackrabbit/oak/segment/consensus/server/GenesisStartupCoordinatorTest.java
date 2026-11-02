@@ -20,8 +20,6 @@ import org.apache.jackrabbit.oak.segment.consensus.config.ConsensusSafety;
 import org.junit.After;
 import org.junit.Before;
 
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
@@ -54,24 +52,6 @@ public class GenesisStartupCoordinatorTest {
     }
 
     @Test
-    public void testGenesisModeStartsStandbyServerWhenBootstrapPresent() throws Exception {
-        ValidatorBootstrap bootstrap = mock(ValidatorBootstrap.class);
-
-        coordinator.initialize(new GenesisStartupCoordinator.StartupContext(
-            BootstrapMode.GENESIS,
-            bootstrap,
-            8091,
-            mock(NodeStore.class),
-            mock(FileStore.class),
-            mock(BlobStore.class),
-            "http://validator-0:8090",
-            mock(GlobalStoreServerComponentFactory.class)
-        ));
-
-        verify(bootstrap).startStandbyServer();
-    }
-
-    @Test
     public void testPrimaryModeVerifiesGenesisWhenPathExists() throws Exception {
         NodeStore nodeStore = mock(NodeStore.class);
         NodeState root = mock(NodeState.class, RETURNS_DEEP_STUBS);
@@ -93,9 +73,6 @@ public class GenesisStartupCoordinatorTest {
             .thenReturn(initializer);
 
         coordinator.initialize(new GenesisStartupCoordinator.StartupContext(
-            BootstrapMode.PRIMARY,
-            null,
-            8091,
             nodeStore,
             fileStore,
             blobStore,
@@ -123,9 +100,6 @@ public class GenesisStartupCoordinatorTest {
             .exists()).thenReturn(false);
 
         coordinator.initialize(new GenesisStartupCoordinator.StartupContext(
-            BootstrapMode.PRIMARY,
-            null,
-            8091,
             nodeStore,
             mock(FileStore.class),
             mock(BlobStore.class),
@@ -151,9 +125,6 @@ public class GenesisStartupCoordinatorTest {
             .thenReturn(initializer);
 
         org.junit.Assert.assertThrows(IllegalStateException.class, () -> coordinator.initialize(new GenesisStartupCoordinator.StartupContext(
-            BootstrapMode.PRIMARY,
-            null,
-            8091,
             nodeStore,
             fileStore,
             blobStore,
@@ -175,9 +146,6 @@ public class GenesisStartupCoordinatorTest {
         when(fileStore.size()).thenReturn(512L * 1024);
 
         org.junit.Assert.assertThrows(IllegalStateException.class, () -> coordinator.initialize(new GenesisStartupCoordinator.StartupContext(
-            BootstrapMode.PRIMARY,
-            null,
-            8091,
             nodeStore,
             fileStore,
             mock(BlobStore.class),
@@ -193,7 +161,7 @@ public class GenesisStartupCoordinatorTest {
         NodeStore store = mock(NodeStore.class);
         when(store.getRoot()).thenThrow(new IllegalStateException("invalid genesis"));
         org.junit.Assert.assertThrows(IllegalStateException.class, () -> coordinator.initialize(
-            new GenesisStartupCoordinator.StartupContext(BootstrapMode.PRIMARY, null, 8091,
+            new GenesisStartupCoordinator.StartupContext(
                 store, mock(FileStore.class), null, "http://validator-0:8090",
                 mock(GlobalStoreServerComponentFactory.class))));
     }

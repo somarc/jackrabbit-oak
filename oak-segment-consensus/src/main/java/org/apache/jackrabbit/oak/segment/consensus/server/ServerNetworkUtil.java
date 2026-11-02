@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.server;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.net.URI;
 
@@ -106,26 +104,6 @@ public final class ServerNetworkUtil {
             log.warn("⚠️  Failed to parse URL {}: {}, using original", url, e.getMessage());
             return url;
         }
-    }
-
-    /**
-     * Parse comma-separated peer URLs from configuration string.
-     *
-     * <p>Peer URLs are resolved to IPs for reliable networking, unless they're
-     * explicitly configured as public URLs (ngrok/Ethos).
-     */
-    static List<String> parsePeerUrls(String peersConfig) {
-        List<String> peers = new ArrayList<>();
-        if (peersConfig != null && !peersConfig.trim().isEmpty()) {
-            String[] urls = peersConfig.split(",");
-            for (String url : urls) {
-                String trimmed = url.trim();
-                if (!trimmed.isEmpty()) {
-                    peers.add(resolveUrlToIP(trimmed));
-                }
-            }
-        }
-        return peers;
     }
 
     /**

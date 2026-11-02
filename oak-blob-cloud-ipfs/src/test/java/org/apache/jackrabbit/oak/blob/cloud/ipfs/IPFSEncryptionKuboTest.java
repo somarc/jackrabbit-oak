@@ -102,9 +102,9 @@ public class IPFSEncryptionKuboTest {
         if (keys != null) {
             properties.setProperty(IPFSDataStore.ENCRYPTION_KEYS, keys);
         }
+        properties.setProperty("ipfsFilesRoot", "/oak/encrypted-" + UUID.randomUUID());
         IPFSDataStore dataStore = new IPFSDataStore();
         dataStore.setProperties(properties);
-        dataStore.setIpfsFilesRoot("/oak/encrypted-" + UUID.randomUUID());
         dataStore.setCacheSize(0);
         dataStore.setCidResolver(replicatedIndex::get);
         dataStore.init(folder.newFolder().getAbsolutePath());

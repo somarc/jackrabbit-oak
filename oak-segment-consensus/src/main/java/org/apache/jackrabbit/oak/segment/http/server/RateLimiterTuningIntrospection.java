@@ -18,84 +18,36 @@ package org.apache.jackrabbit.oak.segment.http.server;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.stream.Stream;
+
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
+import org.apache.jackrabbit.oak.segment.consensus.config.RuntimePropertySourceRegistry;
 
 /**
  * Read-only introspection helpers for effective rate-limiter tuning.
  */
 public final class RateLimiterTuningIntrospection {
 
-    private static final int DEFAULT_REQUESTS_PER_SECOND = 100;
-    private static final int DEFAULT_BURST_SIZE = 200;
-    private static final int DEFAULT_GLOBAL_RPS = 1000;
-    private static final int DEFAULT_WRITE_RPS = 10;
-    private static final boolean DEFAULT_WARN_LOGGING_ENABLED = true;
-    private static final long DEFAULT_WARN_LOG_INTERVAL_MS = 30_000L;
-    private static final int DEFAULT_WARN_LOG_SAMPLE_SIZE = 250;
+    static final String COMPONENT = "rateLimiterTuning";
 
     private RateLimiterTuningIntrospection() {
     }
 
     public static Map<String, Object> effectiveValues() {
         Map<String, Object> values = new LinkedHashMap<>();
-        values.put("enabled", readBoolean(RateLimiter.PROP_ENABLED, true));
-        values.put("requests_per_second", readInt(RateLimiter.PROP_REQUESTS_PER_SECOND, DEFAULT_REQUESTS_PER_SECOND));
-        values.put("burst_size", readInt(RateLimiter.PROP_BURST_SIZE, DEFAULT_BURST_SIZE));
-        values.put("global_rps", readInt(RateLimiter.PROP_GLOBAL_RPS, DEFAULT_GLOBAL_RPS));
-        values.put("write_rps", readInt(RateLimiter.PROP_WRITE_RPS, DEFAULT_WRITE_RPS));
-        values.put("warn_logging_enabled", readBoolean(RateLimiter.PROP_WARN_LOGGING_ENABLED, DEFAULT_WARN_LOGGING_ENABLED));
-        values.put("warn_log_interval_ms", readLong(RateLimiter.PROP_WARN_LOG_INTERVAL_MS, DEFAULT_WARN_LOG_INTERVAL_MS));
-        values.put("warn_log_sample_size", readInt(RateLimiter.PROP_WARN_LOG_SAMPLE_SIZE, DEFAULT_WARN_LOG_SAMPLE_SIZE));
+        values.put("enabled", RuntimeConfigValueResolver.readBoolean(RateLimiter.PROP_ENABLED, true));
+        values.put("requests_per_second", RuntimeConfigValueResolver.readInt(
+            RateLimiter.PROP_REQUESTS_PER_SECOND, RateLimiter.DEFAULT_REQUESTS_PER_SECOND));
+        values.put("burst_size", RuntimeConfigValueResolver.readInt(RateLimiter.PROP_BURST_SIZE, RateLimiter.DEFAULT_BURST_SIZE));
+        values.put("global_rps", RuntimeConfigValueResolver.readInt(RateLimiter.PROP_GLOBAL_RPS, RateLimiter.DEFAULT_GLOBAL_RPS));
+        values.put("write_rps", RuntimeConfigValueResolver.readInt(RateLimiter.PROP_WRITE_RPS, RateLimiter.DEFAULT_WRITE_RPS));
         return values;
     }
 
     public static String source() {
-        String registeredSource = RateLimiterTuningSourceRegistry.getSource();
-        if (!"system-properties".equals(registeredSource)) {
-            return registeredSource;
-        }
-        return hasSystemPropertyOverride() ? "system-properties" : "defaults";
-    }
-
-    private static boolean hasSystemPropertyOverride() {
-        return System.getProperty(RateLimiter.PROP_ENABLED) != null
-            || System.getProperty(RateLimiter.PROP_REQUESTS_PER_SECOND) != null
-            || System.getProperty(RateLimiter.PROP_BURST_SIZE) != null
-            || System.getProperty(RateLimiter.PROP_GLOBAL_RPS) != null
-            || System.getProperty(RateLimiter.PROP_WRITE_RPS) != null
-            || System.getProperty(RateLimiter.PROP_WARN_LOGGING_ENABLED) != null
-            || System.getProperty(RateLimiter.PROP_WARN_LOG_INTERVAL_MS) != null
-            || System.getProperty(RateLimiter.PROP_WARN_LOG_SAMPLE_SIZE) != null;
-    }
-
-    private static int readInt(String key, int defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Integer.parseInt(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
-    }
-
-    private static long readLong(String key, long defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
-        }
-    }
-
-    private static boolean readBoolean(String key, boolean defaultValue) {
-        String raw = System.getProperty(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return defaultValue;
-        }
-        return Boolean.parseBoolean(raw.trim());
+        boolean configured = Stream.of(RateLimiter.PROP_ENABLED, RateLimiter.PROP_REQUESTS_PER_SECOND,
+                RateLimiter.PROP_BURST_SIZE, RateLimiter.PROP_GLOBAL_RPS, RateLimiter.PROP_WRITE_RPS)
+            .anyMatch(RuntimeConfigValueResolver::hasConfiguredValue);
+        return RuntimePropertySourceRegistry.getSource(COMPONENT, configured ? "system-properties" : "defaults");
     }
 }

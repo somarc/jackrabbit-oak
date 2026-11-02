@@ -26,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -99,7 +100,7 @@ public class OsgiConfigApiHandlerTest {
         assertTrue(json.contains("\"contractVersion\":\"config.osgi.schema.v1\""));
         assertTrue(json.contains("\"schema\":"));
         assertTrue(json.contains("\"key\":\"nodeRuntimeTuning.consensus_enabled\""));
-        assertTrue(json.contains("\"key\":\"nodeRuntimeTuning.mock_epoch_duration_seconds\""));
+        assertFalse(json.contains("nodeRuntimeTuning.mock_epoch_duration_seconds"));
         assertTrue(json.contains("\"key\":\"runtimeUiTuning.browser_ui_enabled\""));
         assertTrue(json.contains("\"systemPropertyAlias\":\"consensus.enabled\""));
     }

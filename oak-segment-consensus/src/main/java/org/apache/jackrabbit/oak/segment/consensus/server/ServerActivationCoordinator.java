@@ -21,8 +21,6 @@ import java.io.IOException;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterConfig;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterLauncher;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronClusterService;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap;
-import org.apache.jackrabbit.oak.segment.consensus.bootstrap.ValidatorBootstrap.BootstrapMode;
 import org.apache.jackrabbit.oak.segment.consensus.security.EthereumWallet;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.SegmentHttpServer;
@@ -45,17 +43,15 @@ final class ServerActivationCoordinator {
     }
 
     ActivationResult activate(ActivationContext context) throws IOException {
-        startHttpServer(context.detectedMode(), context.httpServer(), context.port());
+        startHttpServer(context.httpServer(), context.port());
 
         AeronClusterConfig aeronConfig = context.aeronClusterService() != null
             ? context.aeronClusterService().getConfig()
             : null;
-        boolean isStandbyMode = context.detectedMode() == BootstrapMode.STANDBY;
 
         ConsensusStartupCoordinator.StartupOutcome consensusStartup = consensusStartupStarter.initialize(
             new ConsensusStartupCoordinator.StartupContext(
                 context.port(),
-                isStandbyMode,
                 context.fileStore(),
                 context.nodeStore(),
                 context.httpServer(),
@@ -71,26 +67,12 @@ final class ServerActivationCoordinator {
 
         if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DISABLED) {
             log.info("ℹ️  Consensus disabled (single-validator mode)");
-        } else if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED) {
-            log.info("ℹ️  Consensus initialization deferred (STANDBY mode -> callback)");
         }
 
-        startStandbyServer(context.detectedMode(), context.bootstrap());
-
-        return new ActivationResult(
-            consensusStartup.aeronClusterService(),
-            resolveLauncher(context.existingLauncher(), consensusStartup)
-        );
+        return new ActivationResult(consensusStartup.aeronClusterService(), consensusStartup.launcher());
     }
 
-    private static void startHttpServer(BootstrapMode detectedMode,
-                                        SegmentHttpServer httpServer,
-                                        int port) throws IOException {
-        if (detectedMode == BootstrapMode.STANDBY) {
-            log.info("⏸️  HTTP server startup deferred (STANDBY mode - will start after bootstrap completes)");
-            return;
-        }
-
+    private static void startHttpServer(SegmentHttpServer httpServer, int port) throws IOException {
         log.info("Starting HTTP server...");
         try {
             httpServer.start();
@@ -100,27 +82,6 @@ final class ServerActivationCoordinator {
         }
     }
 
-    private static void startStandbyServer(BootstrapMode detectedMode, ValidatorBootstrap bootstrap) {
-        if ((detectedMode != BootstrapMode.PRIMARY && detectedMode != BootstrapMode.GENESIS) || bootstrap == null) {
-            return;
-        }
-
-        try {
-            bootstrap.startStandbyServer();
-        } catch (Exception e) {
-            log.warn("⚠️  Failed to start StandbyServerSync: {}", e.getMessage());
-        }
-    }
-
-    private static AeronClusterLauncher resolveLauncher(AeronClusterLauncher existingLauncher,
-                                                        ConsensusStartupCoordinator.StartupOutcome consensusStartup) {
-        if (consensusStartup.disposition() == ConsensusStartupCoordinator.StartupDisposition.DEFERRED
-                && consensusStartup.launcher() == null) {
-            return existingLauncher;
-        }
-        return consensusStartup.launcher();
-    }
-
     @FunctionalInterface
     interface ConsensusStartupStarter {
         ConsensusStartupCoordinator.StartupOutcome initialize(ConsensusStartupCoordinator.StartupContext context)
@@ -128,7 +89,6 @@ final class ServerActivationCoordinator {
     }
 
     record ActivationContext(int port,
-                             BootstrapMode detectedMode,
                              FileStore fileStore,
                              NodeStore nodeStore,
                              SegmentHttpServer httpServer,
@@ -136,10 +96,8 @@ final class ServerActivationCoordinator {
                              String storeDirectory,
                              BlobStore blobStore,
                              AeronClusterService aeronClusterService,
-                             AeronClusterLauncher existingLauncher,
                              GlobalStoreServerComponentFactory componentFactory,
-                             String clusterWalletAddress,
-                             ValidatorBootstrap bootstrap) {
+                             String clusterWalletAddress) {
     }
 
     record ActivationResult(AeronClusterService aeronClusterService, AeronClusterLauncher launcher) {

@@ -222,24 +222,24 @@ public class BlockchainConfig {
      */
     private BlockchainConfig() {
         // Read mode (env var > system property > default)
-        String modeStr = readStringConfig(ENV_MODE, PROP_MODE, "mock");
+        String modeStr = RuntimeConfigValueResolver.readStringEnvFirst(PROP_MODE, ENV_MODE, "mock");
         this.mode = Mode.fromString(modeStr);
 
         // Determine default contract address based on mode
         String defaultContract = mode == Mode.MAINNET ? MAINNET_CONTRACT : SEPOLIA_CONTRACT;
 
         // Read contract address (env var > system property > mode-based default)
-        this.contractAddress = readStringConfig(ENV_CONTRACT_ADDRESS, PROP_CONTRACT_ADDRESS, defaultContract);
+        this.contractAddress = RuntimeConfigValueResolver.readStringEnvFirst(PROP_CONTRACT_ADDRESS, ENV_CONTRACT_ADDRESS, defaultContract);
 
         // Read RPC URL (env var > system property > null)
-        this.rpcUrl = readStringConfig(ENV_RPC_URL, PROP_RPC_URL, null);
-        this.contractCodeHash = readStringConfig(ENV_CONTRACT_CODEHASH, PROP_CONTRACT_CODEHASH, null);
+        this.rpcUrl = RuntimeConfigValueResolver.readStringEnvFirst(PROP_RPC_URL, ENV_RPC_URL, null);
+        this.contractCodeHash = RuntimeConfigValueResolver.readStringEnvFirst(PROP_CONTRACT_CODEHASH, ENV_CONTRACT_CODEHASH, null);
 
         // Read measured gas assumptions used for user-facing write pricing estimates
-        this.gasPriceGwei = readLongConfig(ENV_GAS_PRICE_GWEI, PROP_GAS_PRICE_GWEI, DEFAULT_GAS_PRICE_GWEI);
-        this.gasWriteStandard = readLongConfig(ENV_GAS_WRITE_STANDARD, PROP_GAS_WRITE_STANDARD, DEFAULT_GAS_WRITE_STANDARD);
-        this.gasWriteExpress = readLongConfig(ENV_GAS_WRITE_EXPRESS, PROP_GAS_WRITE_EXPRESS, DEFAULT_GAS_WRITE_EXPRESS);
-        this.gasWritePriority = readLongConfig(ENV_GAS_WRITE_PRIORITY, PROP_GAS_WRITE_PRIORITY, DEFAULT_GAS_WRITE_PRIORITY);
+        this.gasPriceGwei = RuntimeConfigValueResolver.readLongEnvFirst(PROP_GAS_PRICE_GWEI, ENV_GAS_PRICE_GWEI, DEFAULT_GAS_PRICE_GWEI);
+        this.gasWriteStandard = RuntimeConfigValueResolver.readLongEnvFirst(PROP_GAS_WRITE_STANDARD, ENV_GAS_WRITE_STANDARD, DEFAULT_GAS_WRITE_STANDARD);
+        this.gasWriteExpress = RuntimeConfigValueResolver.readLongEnvFirst(PROP_GAS_WRITE_EXPRESS, ENV_GAS_WRITE_EXPRESS, DEFAULT_GAS_WRITE_EXPRESS);
+        this.gasWritePriority = RuntimeConfigValueResolver.readLongEnvFirst(PROP_GAS_WRITE_PRIORITY, ENV_GAS_WRITE_PRIORITY, DEFAULT_GAS_WRITE_PRIORITY);
 
         // Log configuration
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -279,47 +279,6 @@ public class BlockchainConfig {
                 log.error("❌ MAINNET RUNTIME IS NOT ENABLED FOR V1 MERGE POSTURE");
                 log.error("   Keep mainnet disabled until contract, verification, and operational review are complete");
                 break;
-        }
-    }
-
-    /**
-     * Read string configuration (env var > system property > default).
-     */
-    private String readStringConfig(String envVar, String sysProp, String defaultValue) {
-        String osgiOverride = RuntimePropertyOverrideRegistry.get(sysProp);
-        if (osgiOverride != null && !osgiOverride.isEmpty()) {
-            return osgiOverride;
-        }
-
-        // Check environment variable first
-        String envValue = System.getenv(envVar);
-        if (envValue != null && !envValue.isEmpty()) {
-            return envValue;
-        }
-
-        // Check system property
-        String propValue = System.getProperty(sysProp);
-        if (propValue != null && !propValue.isEmpty()) {
-            return propValue;
-        }
-
-        // Return default
-        return defaultValue;
-    }
-
-    /**
-     * Read long configuration (env var > system property > default).
-     */
-    private long readLongConfig(String envVar, String sysProp, long defaultValue) {
-        String raw = readStringConfig(envVar, sysProp, null);
-        if (raw == null) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(raw.trim());
-        } catch (NumberFormatException e) {
-            log.warn("Invalid numeric config {} / {}='{}', using default {}", envVar, sysProp, raw, defaultValue);
-            return defaultValue;
         }
     }
 

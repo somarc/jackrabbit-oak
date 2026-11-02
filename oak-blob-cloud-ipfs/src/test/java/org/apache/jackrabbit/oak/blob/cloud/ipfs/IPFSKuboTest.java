@@ -38,6 +38,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Properties;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -201,9 +202,11 @@ public class IPFSKuboTest {
     }
 
     private DataStoreBlobStore blobStore(long cacheSize) throws Exception {
+        Properties properties = new Properties();
+        properties.setProperty(IpfsClientSettings.ENDPOINT, KUBO.apiEndpoint());
+        properties.setProperty("ipfsFilesRoot", filesRoot);
         IPFSDataStore dataStore = new IPFSDataStore();
-        dataStore.setIpfsApiEndpoint(KUBO.apiEndpoint());
-        dataStore.setIpfsFilesRoot(filesRoot);
+        dataStore.setProperties(properties);
         dataStore.setCacheSize(cacheSize);
         dataStore.setStagingSplitPercentage(0);
         dataStore.init(folder.newFolder().getAbsolutePath());

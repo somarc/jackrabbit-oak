@@ -76,17 +76,6 @@
             </excludes>
            </configuration>
         </plugin>
-        <!-- Skip remote-resources plugin (causes issues with JitPack dependencies through corporate Artifactory) -->
-        <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-remote-resources-plugin</artifactId>
-          <executions>
-            <execution>
-              <id>process-resource-bundles</id>
-              <phase>none</phase>
-            </execution>
-          </executions>
-        </plugin>
         <!-- Build executable uber JAR for GlobalStoreServer -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -129,6 +118,8 @@
                       <exclude>META-INF/*.SF</exclude>
                       <exclude>META-INF/*.DSA</exclude>
                       <exclude>META-INF/*.RSA</exclude>
+                      <!-- Jars that OSGi bundles embed; java -jar never loads a jar inside a jar. -->
+                      <exclude>*.jar</exclude>
                     </excludes>
                   </filter>
                 </filters>
@@ -206,6 +197,13 @@
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-azure</artifactId>
             <version>${oak.version}</version>
+            <!-- Netty falls back to the JDK TLS provider; nothing asks for native OpenSSL. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>io.netty</groupId>
+                    <artifactId>netty-tcnative-boringssl-static</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- AWS segment persistence: TAR segments in S3, journal/lock in DynamoDB (ADR 089) -->
@@ -263,16 +261,28 @@
             <groupId>org.apache.jackrabbit</groupId>
             <artifactId>oak-segment-remote</artifactId>
             <version>${oak.version}</version>
+            <!-- The Redis persistent segment cache is never configured. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.servicemix.bundles</groupId>
+                    <artifactId>org.apache.servicemix.bundles.jedis</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>redis.clients</groupId>
+                    <artifactId>jedis</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.servicemix.bundles</groupId>
+                    <artifactId>org.apache.servicemix.bundles.cglib</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-pool2</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         
-        <!-- Oak Segment Standby (for Cold Standby bootstrap) -->
-        <!-- Note: This is included in oak-segment-tar, but we need Netty explicitly -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>${netty.version}</version>
-        </dependency>
-        <!-- Commons Lang3 (required by Standby) - matches oak-parent version -->
+        <!-- Commons Lang3 - matches oak-parent version -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
@@ -290,6 +300,25 @@
             <groupId>org.web3j</groupId>
             <artifactId>core</artifactId>
             <version>4.12.3</version>
+            <!-- Only HttpService is used: drop the IPC, WebSocket, AWS KMS signer and KZG blob extras. -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.github.jnr</groupId>
+                    <artifactId>jnr-unixsocket</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.java-websocket</groupId>
+                    <artifactId>Java-WebSocket</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>kms</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.consensys.protocols</groupId>
+                    <artifactId>jc-kzg-4844</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         
         <!-- Servlet API (compile scope for standalone JAR - needed by Jetty) -->
@@ -346,18 +375,12 @@
         </dependency>
         <dependency>
             <groupId>io.prometheus</groupId>
-            <artifactId>simpleclient_servlet</artifactId>
+            <artifactId>simpleclient_common</artifactId>
             <version>0.16.0</version>
         </dependency>
         <dependency>
             <groupId>io.prometheus</groupId>
             <artifactId>simpleclient_hotspot</artifactId>
-            <version>0.16.0</version>
-        </dependency>
-        <!-- Bridge Dropwizard metrics to Prometheus -->
-        <dependency>
-            <groupId>io.prometheus</groupId>
-            <artifactId>simpleclient_dropwizard</artifactId>
             <version>0.16.0</version>
         </dependency>
 
