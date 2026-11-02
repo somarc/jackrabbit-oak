@@ -385,7 +385,7 @@ public class ConsensusApiHandlerTest {
         new WalletQueryHandler(context).handleWalletStats(mockRequest, mockResponse);
         
         // Then: Should return JSON content type
-        verify(mockResponse).setContentType("application/json");
+        verify(mockResponse, atLeastOnce()).setContentType("application/json");
     }
 
     @Test
@@ -397,7 +397,7 @@ public class ConsensusApiHandlerTest {
         new WalletQueryHandler(context).handleWalletStats(mockRequest, mockResponse);
         
         // Then: Should return JSON content type
-        verify(mockResponse).setContentType("application/json");
+        verify(mockResponse, atLeastOnce()).setContentType("application/json");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -418,14 +418,14 @@ public class ConsensusApiHandlerTest {
 
     @Test
     public void testWalletContentSetsJsonContentType() throws Exception {
-        // Given: Request with a wallet parameter (will fail on query but that's ok)
+        // Given: Request with a wallet parameter; the mocked store fails the query, which answers a JSON error
         when(mockRequest.getParameter("wallet")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
         
         // When: Wallet content requested
         new WalletQueryHandler(context).handleWalletContent(mockRequest, mockResponse);
         
         // Then: Should set JSON content type
-        verify(mockResponse).setContentType("application/json");
+        verify(mockResponse, atLeastOnce()).setContentType("application/json");
     }
 
     @Test

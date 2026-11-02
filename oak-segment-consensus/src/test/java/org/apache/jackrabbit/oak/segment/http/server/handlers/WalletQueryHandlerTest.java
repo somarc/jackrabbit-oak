@@ -17,6 +17,7 @@
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMountStatus;
 import org.apache.jackrabbit.oak.segment.consensus.mount.RemoteMounts;
 import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
@@ -25,6 +26,7 @@ import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -36,6 +38,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -191,6 +194,56 @@ public class WalletQueryHandlerTest {
 
     private static final RemoteMountStatus UNAVAILABLE = new RemoteMountStatus(
         "http://cluster-b:8190", "00-ff", false, false, "OPEN", null, null, "connection refused");
+
+    @Test
+    public void testAReadFailureIsAnErrorNotAnEmptyListing() throws Exception {
+        NodeStore failing = mock(NodeStore.class);
+        when(failing.getRoot()).thenThrow(new IllegalStateException("Segment not found"));
+        ServerContext context = new ServerContext(mock(FileStore.class), failing, Paths.get("/tmp/store"),
+            "http://localhost:8090");
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("wallet")).thenReturn(WALLET_1);
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse response = responseWithBody(body);
+        new WalletQueryHandler(context).handleWalletContent(request, response);
+        verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        assertFalse(body.toString().contains("\"content\""));
+
+        RemoteMounts mounts = mock(RemoteMounts.class);
+        when(mounts.reportReadFailures(anyList())).thenReturn(true);
+        MountReadFailures.begin(mounts);
+        try {
+            MountReadFailures.record("http://cluster-b:8090", MountReadFailures.Kind.MISSING, "segment gone");
+            StringWriter remoteBody = new StringWriter();
+            HttpServletResponse remote = responseWithBody(remoteBody);
+            new WalletQueryHandler(context).handleWalletContent(request, remote);
+            verify(remote).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            assertTrue(remoteBody.toString().contains("\"code\":\"mount_stale\""));
+
+            StringWriter listBody = new StringWriter();
+            HttpServletResponse list = responseWithBody(listBody);
+            new WalletQueryHandler(context).handleWalletStats(mock(HttpServletRequest.class), list);
+            verify(list).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+        } finally {
+            MountReadFailures.end();
+        }
+    }
+
+    @Test
+    public void testAWalletTooShortToShardIsABadRequest() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getParameter("wallet")).thenReturn("0x12");
+        WalletQueryHandler handler = new WalletQueryHandler(newContext(new MemoryNodeStore()));
+
+        HttpServletResponse content = responseWithBody(new StringWriter());
+        handler.handleWalletContent(request, content);
+        verify(content).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+
+        HttpServletResponse stats = responseWithBody(new StringWriter());
+        handler.handleWalletStats(request, stats);
+        verify(stats).setStatus(HttpServletResponse.SC_BAD_REQUEST);
+    }
 
     private static ServerContext newContext(MemoryNodeStore nodeStore) {
         return new ServerContext(
