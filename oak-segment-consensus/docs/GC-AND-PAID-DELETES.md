@@ -9,11 +9,10 @@ ETH contract; Oak's own GC mechanisms run unabated; pricing gets a separate reth
 and D2 below and defers D4 to the pricing rethink.
 
 Update: D1 is decided and section 4.1 is implemented (phase 1a). Section 1 describes the code at
-`42fb205ece`, before that change. D3 is decided and binary GC (section 4.4) is implemented on
-`feature/binary-gc`.
+`42fb205ece`, before that change. D3 is decided and binary GC (section 4.4) is implemented.
 
 Update: segment GC (section 4.2, phase 2) is implemented and on by default, as the owner decided.
-The 3x2 harness run in section 5 is still to do.
+The 3x2 harness run in section 5 passed on `1900068ce6` (see Evidence).
 
 This note explains how deletes, garbage and GC work today, then proposes a simpler model: validators
 run GC as routine maintenance, and only writes and deletes are paid on chain. Section 6 lists the
@@ -309,10 +308,14 @@ Open risks:
      page.
 2. **Segment GC.** Scheduled, staggered member-local GC (4.2) and GC state reporting.
    Implemented, on by default (owner decision), with an offline test that runs two scheduled full
-   GCs on a store built like the validator's and one that keeps merging during compaction. Still
-   to do: a 3x2 harness run where cluster B compacts while cluster A reads through its mount, with
-   no 500s or missing content on A.
+   GCs on a store built like the validator's and one that keeps merging during compaction.
 3. **Binary GC** (4.4). Implemented, on by default.
+4. **Live check.** The federation 3x2 GC scenario (`oak-chain-infra`
+   `tests/routing/federation-3x2-gc.sh`) passed 40/40 required assertions on `1900068ce6`, with
+   cluster B compacting every minute and releasing binaries while cluster A read B's content
+   through its mount (see Evidence). The run also found three read-path bugs, fixed on this branch:
+   `/api/explore` stopped at the local ancestors of a mount root, kept the read view it was built
+   with, and a released binary answered 500 instead of 404.
 4. **Binary pricing** (4.5).
 
 ## 6. Decisions needed
@@ -323,9 +326,28 @@ Open risks:
 | D2 | Segment GC member-local and staggered, not a replicated decision | Decided: Oak's own mechanisms, unabated. Done in phase 2, on by default |
 | D3 | Binary GC: Oak's blob GC per validator for local entries; cluster unpin only behind a barrier ordered against writes, only on an IPFS Cluster dedicated to the enterprise cluster | Decided and implemented as in 4.4: leader mark from Oak's reference collection, replicated `BINARY_RELEASE` ordered by log position, member-local deletes; cluster unpin only with `ipfs.cluster.unpin-on-delete` |
 | D4 | Binary size and pricing | Deferred to the pricing rethink |
-| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Implemented as defaults; tune after the harness run |
+| D5 | Default schedule: tail compaction daily, full compaction weekly, `retainedGenerations` 2 | Implemented as defaults; tune under real load |
 
 ## Evidence
+
+Live run, `oak-chain-infra` `feature/federation-3x2-gc`, jar `oak-segment-consensus-1900068ce6.jar`
+(sha256 `2c1fa58e6965d097d4af1eb62dc341ffca213432ef29810d27c6a92ec92d54d1`), one host, mock mode,
+two enterprise clusters of three validators. Cluster B ran the test profile (tail 60 s, full 120 s,
+`oak.gc.backoff=0`, estimation off, binary interval and grace 60 s, delete delay 30 s); cluster A
+kept the defaults.
+
+| Check | Result |
+|---|---|
+| Federation smoke (`20261102T011558Z`) | 58/58 required |
+| GC scenario (`gc-20261102T011615Z`) | 40/40 required |
+| Segment GC on B, per member | 2 full and 2 tail runs; reclaimed 3.1 MB, 6.0 MB, 3.1 MB; store down to 62-120 kB |
+| Stagger | members at 0/20/40 s of each slot, no overlapping runs |
+| Binary GC | 3 deleted binaries released in one entry on every member, index entries gone, records deleted (0 failures), kept binary intact, deleted binaries answer 404 |
+| Cluster A reading B through its mount | 3,240 reads, all 1,440 control reads present, 0 × 503, 0 × 500 |
+| Convergence | both clusters converged on kept and deleted content; no restarts |
+
+Not covered: several hosts, chain-backed mode, IPFS Cluster unpin (the run used one shared Kubo),
+sustained write load during compaction.
 
 The review that this note summarises:
 `oak-chain-compaction-and-paid-deletes-review.md` (Studio artifact), with file and line references
