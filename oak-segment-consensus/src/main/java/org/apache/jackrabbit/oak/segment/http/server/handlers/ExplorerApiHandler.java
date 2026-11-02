@@ -105,19 +105,19 @@ public class ExplorerApiHandler {
             // Get the head state from NodeStore
             NodeState root = nodeStoreSupplier.get().getRoot();
             
-            // Navigate to the requested path
+            // Navigate to the requested path. Existence is checked only at the end: in the read view the
+            // ancestors of a remote mount's root do not exist in the local store, but the mounted node does.
             NodeState node = root;
             if (!"/".equals(path)) {
-                String[] parts = path.substring(1).split("/");
-                for (String part : parts) {
+                for (String part : path.substring(1).split("/")) {
                     if (!part.isEmpty()) {
                         node = node.getChildNode(part);
-                        if (!node.exists()) {
-                            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
-                            return;
-                        }
                     }
                 }
+            }
+            if (!node.exists()) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_NOT_FOUND, "Node not found");
+                return;
             }
             
             Map<String, Object> payload = new LinkedHashMap<>();

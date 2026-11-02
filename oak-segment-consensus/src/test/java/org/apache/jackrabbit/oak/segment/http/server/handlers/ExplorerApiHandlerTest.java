@@ -22,6 +22,9 @@ import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
 import org.apache.jackrabbit.oak.spi.blob.BlobStore;
 import org.apache.jackrabbit.oak.spi.commit.CommitInfo;
 import org.apache.jackrabbit.oak.spi.commit.EmptyHook;
+import org.apache.jackrabbit.oak.composite.CompositeNodeStore;
+import org.apache.jackrabbit.oak.spi.mount.MountInfoProvider;
+import org.apache.jackrabbit.oak.spi.mount.Mounts;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
@@ -41,6 +44,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -98,6 +102,36 @@ public class ExplorerApiHandlerTest {
         HttpServletResponse found = responseWithBody(new StringWriter());
         handler.handleExploreNode(found, "/oak-chain/87");
         verify(found).setStatus(HttpServletResponse.SC_OK);
+    }
+
+    @Test
+    public void exploreReachesContentUnderARemoteMountWhoseAncestorsAreNotLocal() throws Exception {
+        String mountRoot = "/oak-chain/87/e0/d8/0x87e0d8cae7590570963f22b1fc75df597d77feba";
+        MemoryNodeStore local = new MemoryNodeStore();
+        NodeBuilder localRoot = local.getRoot().builder();
+        localRoot.child("oak-chain").child("00");
+        local.merge(localRoot, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        MemoryNodeStore remote = new MemoryNodeStore();
+        NodeBuilder remoteRoot = remote.getRoot().builder();
+        NodeBuilder page = remoteRoot;
+        for (String name : (mountRoot + "/content/page").substring(1).split("/")) {
+            page = page.child(name);
+        }
+        page.setProperty("message", "from cluster B");
+        remote.merge(remoteRoot, EmptyHook.INSTANCE, CommitInfo.EMPTY);
+        MountInfoProvider mounts = Mounts.newBuilder().mount("remote-b", true, List.of(), List.of(mountRoot)).build();
+        NodeStore readView = new CompositeNodeStore.Builder(mounts, local).addMount("remote-b", remote).build();
+        ExplorerApiHandler handler = new ExplorerApiHandler(readView, Paths.get("/tmp/store"), null);
+
+        StringWriter body = new StringWriter();
+        HttpServletResponse found = responseWithBody(body);
+        handler.handleExploreNode(found, mountRoot + "/content/page");
+        verify(found).setStatus(HttpServletResponse.SC_OK);
+        assertTrue(body.toString(), body.toString().contains("from cluster B"));
+
+        HttpServletResponse missing = responseWithBody(new StringWriter());
+        handler.handleExploreNode(missing, mountRoot + "/content/absent");
+        verify(missing).setStatus(HttpServletResponse.SC_NOT_FOUND);
     }
 
     @Test
