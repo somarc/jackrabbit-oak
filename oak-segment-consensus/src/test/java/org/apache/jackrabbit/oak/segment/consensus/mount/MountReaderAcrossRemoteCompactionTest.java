@@ -169,7 +169,7 @@ public class MountReaderAcrossRemoteCompactionTest {
     }
 
     private LazyHttpNodeStore mount() {
-        return new LazyHttpNodeStore(url, "owner", 5_000L, 30_000L, new CircuitBreaker("owner"),
+        return new LazyHttpNodeStore(url, "owner", new CircuitBreaker("owner"),
             LazyHttpNodeStore::createRemoteNodeStore, 1_000L, 3_600_000L);
     }
 

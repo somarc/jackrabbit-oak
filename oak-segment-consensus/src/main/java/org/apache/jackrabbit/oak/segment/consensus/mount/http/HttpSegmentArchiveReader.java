@@ -158,6 +158,6 @@ public class HttpSegmentArchiveReader extends AbstractRemoteSegmentArchiveReader
     public void close() {
         super.close();
         // Log HTTP/2 stats on close
-        log.debug("Closed HttpSegmentArchiveReader. HTTP/2 stats: {}", http2ClientPool.getPoolStats());
+        log.debug("Closed HttpSegmentArchiveReader");
     }
 }

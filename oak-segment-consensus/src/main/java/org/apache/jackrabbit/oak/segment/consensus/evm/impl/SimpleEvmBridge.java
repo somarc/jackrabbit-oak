@@ -18,8 +18,6 @@ package org.apache.jackrabbit.oak.segment.consensus.evm.impl;
 
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
-import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
-import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueuePolicy;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -34,17 +32,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Simple EVM bridge implementation.
- * <p>
- * This is a POC implementation that simulates blockchain interaction.
- * A production implementation would:
- * - Use Web3j or ethers-java to connect to actual Ethereum nodes
- * - Listen for smart contract events using WebSocket subscriptions
- * - Verify transaction receipts and confirmations
- * - Handle chain reorganizations
- * - Implement retry logic and error handling
- * <p>
- * For now, we simulate payments in memory.
+ * Mock-mode EVM bridge: every queued proposal gets a simulated payment from its registered wallet, kept in memory.
  */
 public class SimpleEvmBridge implements EvmBridge {
     
@@ -55,37 +43,15 @@ public class SimpleEvmBridge implements EvmBridge {
     private final Map<String, PaymentProof> payments = new ConcurrentHashMap<>();
     private final Map<String, String> proposalToWalletMapping = new ConcurrentHashMap<>(); // proposalId -> walletAddress
     private long currentBlock = 1000000;
-    private final BlockchainConfig.Mode mode;
     
     /**
-     * Create a new EVM bridge.
-     *
-     * @param networkName the network (e.g., "mainnet", "sepolia", "mock")
+     * @param networkName the network name reported by the bridge (e.g. "mock")
      * @param contractAddress the payment verifier contract address
      */
     public SimpleEvmBridge(@NotNull String networkName, @NotNull String contractAddress) {
         this.networkName = networkName;
         this.contractAddress = contractAddress;
-        this.mode = BlockchainConfig.getInstance().getMode();
-        
-        switch (mode) {
-            case MOCK:
-                log.warn("⚠️  SimpleEvmBridge in MOCK MODE - all payments auto-simulated");
-                break;
-            case SEPOLIA:
-                log.info("✅ SimpleEvmBridge in SEPOLIA MODE - verifying payments on Sepolia testnet");
-                break;
-            case MAINNET:
-                log.info("🔴 SimpleEvmBridge in MAINNET MODE - verifying payments on Ethereum mainnet");
-                break;
-        }
-    }
-    
-    /**
-     * Convenience constructor for testnet.
-     */
-    public SimpleEvmBridge() {
-        this("sepolia", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
+        log.warn("⚠️  SimpleEvmBridge in MOCK MODE - all payments auto-simulated");
     }
     
     @Override
@@ -96,49 +62,36 @@ public class SimpleEvmBridge implements EvmBridge {
             return existing;
         }
         
-        // In MOCK MODE, auto-simulate payments for any proposal
-        if (mode == BlockchainConfig.Mode.MOCK) {
-            log.debug("🎭 MOCK MODE: Auto-simulating payment for proposal {}", proposalId);
-            
-            // Get the wallet address for this proposal (registered earlier)
-            String walletAddress = proposalToWalletMapping.get(proposalId);
-            if (walletAddress == null) {
-                // SECURITY: Wallet address MUST be registered when proposal is queued
-                // If it's missing, this is a programming error - fail hard
-                String errorMsg = String.format(
-                    "SECURITY VIOLATION: No wallet address registered for proposal %s. " +
-                    "registerProposalWallet() must be called when queuing. " +
-                    "Cannot create payment proof without authenticated wallet.", 
-                    proposalId
-                );
-                log.error("🔒 {}", errorMsg);
-                throw new IllegalStateException(errorMsg);
-            }
-            
-            String mockTxHash = buildMockTransactionHash(proposalId);
-            
-            PaymentProof mockPayment = new SimplePaymentProof(
-                mockTxHash, // Mock tx hash (64 chars)
-                currentBlock++, // Increment block
-                walletAddress, // From address (use registered wallet)
-                contractAddress, // To address (contract)
-                proposalId,
-                "1000000000000000", // 0.001 ETH
-                ProposalQueuePolicy.requiredConfirmations()
+        log.debug("🎭 MOCK MODE: Auto-simulating payment for proposal {}", proposalId);
+        // SECURITY: the wallet must be registered when the proposal is queued; a missing one is a programming error
+        String walletAddress = proposalToWalletMapping.get(proposalId);
+        if (walletAddress == null) {
+            String errorMsg = String.format(
+                "SECURITY VIOLATION: No wallet address registered for proposal %s. " +
+                "registerProposalWallet() must be called when queuing. " +
+                "Cannot create payment proof without authenticated wallet.",
+                proposalId
             );
-            
-            payments.put(proposalId, mockPayment);
-            return mockPayment;
+            log.error("🔒 {}", errorMsg);
+            throw new IllegalStateException(errorMsg);
         }
-        
-        // In SEPOLIA/MAINNET MODE, return null (payment not found - will retry)
-        // In production, this would call Web3j to verify the transaction on-chain
-        return null;
+
+        PaymentProof mockPayment = new PaymentProof(
+            buildMockTransactionHash(proposalId),
+            currentBlock++,
+            walletAddress,
+            contractAddress,
+            proposalId,
+            "1000000000000000", // 0.001 ETH
+            ProposalQueuePolicy.requiredConfirmations()
+        );
+        payments.put(proposalId, mockPayment);
+        return mockPayment;
     }
 
     @Override
     @Nullable
-    public SettlementDetails getSettlementDetailsByProposalId(@NotNull String proposalId) {
+    public PaymentProof getSettlementDetailsByProposalId(@NotNull String proposalId) {
         // Read path: a proposal this bridge never registered (or no longer retains)
         // is a lookup miss, not a security violation. verifyPayment() keeps its
         // fail-hard registerProposalWallet() enforcement for the queue/settlement path.
@@ -146,18 +99,18 @@ public class SimpleEvmBridge implements EvmBridge {
         if (proof == null && proposalToWalletMapping.containsKey(proposalId)) {
             proof = verifyPayment(proposalId);
         }
-        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
+        return proof;
     }
 
     @Override
     @Nullable
-    public SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+    public PaymentProof getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
         if (transactionHash.trim().isEmpty()) {
             return null;
         }
         for (PaymentProof proof : payments.values()) {
             if (proof != null && transactionHash.equalsIgnoreCase(proof.getTransactionHash())) {
-                return SettlementDetails.fromProof(getNetworkName(), proof);
+                return proof;
             }
         }
         return null;

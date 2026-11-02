@@ -78,21 +78,6 @@ public class WriteApplicationService {
     private CidMappingCallback cidMappingCallback;
     private DurabilityCallback durabilityCallback;
     
-    /**
-     * Create a new WriteApplicationService.
-     * 
-     * @param fileStore Oak FileStore for segment storage
-     * @param nodeStore Oak NodeStore for content operations
-     * @param blobStore BlobStore for binary content (may be null)
-     */
-    public WriteApplicationService(
-            @NotNull FileStore fileStore,
-            @NotNull NodeStore nodeStore,
-            @Nullable BlobStore blobStore,
-            @NotNull FileStoreFlushService flushService) {
-        this(fileStore, () -> nodeStore, () -> blobStore, flushService);
-    }
-
     public WriteApplicationService(
             @NotNull FileStore fileStore,
             @NotNull Supplier<NodeStore> nodeStoreSupplier,
@@ -146,37 +131,11 @@ public class WriteApplicationService {
      * @param blobId Blob ID for binary content
      * @param mimeType MIME type for binary content
      * @param ipfsCid IPFS CID from client-side upload (ADR 016)
-     * @param proposalId Proposal ID for durability tracking (ADR 026)
+     * @param auditMetadata proposal id (durability tracking, ADR 026), command time and applied log position
      * @return The new HEAD after the write
-     * @throws IllegalStateException if signature is null (security violation)
+     * @throws MutationRejectedException if the write is rejected deterministically (e.g. null signature)
      * @throws RuntimeException if write fails
      */
-    @NotNull
-    public String applyWrite(
-            @NotNull String walletAddress,
-            @NotNull String path,
-            @Nullable String contentType,
-            @Nullable String message,
-            @NotNull String signature,
-            @Nullable String intentToken,
-            @Nullable String blobId,
-            @Nullable String mimeType,
-            @Nullable String ipfsCid,
-            @Nullable String proposalId) {
-        return applyWriteWithAuditMetadata(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            intentToken,
-            blobId,
-            mimeType,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     @NotNull
     public String applyWriteWithAuditMetadata(
             @NotNull String walletAddress,
@@ -206,10 +165,6 @@ public class WriteApplicationService {
             // Federated clusters decide ownership from the committed directory; null means unfederated
             String namespace = NamespaceAuthority.requireWritable(root, walletAddress, path);
             BlobStore blobStore = blobStoreSupplier.get();
-            
-            // Get current HEAD for logging
-            String previousHead = fileStore.getHead().getRecordId().toString();
-            log.debug("📍 Previous HEAD: {}", MutationApplySupport.truncate(previousHead, 20));
             
             // Validate path format
             String[] pathParts = path.split("/");
@@ -243,7 +198,7 @@ public class WriteApplicationService {
                     }
                     
                     // Detect wallet node (matches pattern: 0x[a-f0-9]{40})
-                    if (pathParts[i].matches("0x[a-f0-9]{40}")) {
+                    if (MutationApplySupport.WALLET_NODE_NAME.matcher(pathParts[i]).matches()) {
                         walletNode = current;
                         walletNodeName = pathParts[i];
                     }
@@ -303,7 +258,8 @@ public class WriteApplicationService {
 
             // Commit (deterministic on all nodes)
             MutationApplySupport.mergeReplicated(
-                nodeStore, rootBuilder, "aeron-replication", auditMetadata, "Failed to commit write");
+                nodeStore, rootBuilder, "aeron-replication",
+                auditMetadata != null ? auditMetadata.getAppliedLogPosition() : null, "Failed to commit write");
             flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
             
             // Get new HEAD

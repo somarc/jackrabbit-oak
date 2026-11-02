@@ -18,11 +18,11 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.security;
 
-import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.bouncycastle.jce.interfaces.ECPublicKey;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.web3j.crypto.Hash;
 
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
@@ -373,21 +373,13 @@ public class EthereumWallet {
                     "Expected uncompressed secp256k1 public key (65 bytes, 0x04 prefix)");
             }
 
-            byte[] hash = keccak256(Arrays.copyOfRange(uncompressedPublicKey, 1, uncompressedPublicKey.length));
+            byte[] hash = Hash.sha3(Arrays.copyOfRange(uncompressedPublicKey, 1, uncompressedPublicKey.length));
             byte[] addressBytes = Arrays.copyOfRange(hash, hash.length - 20, hash.length);
             return "0x" + HexFormat.of().formatHex(addressBytes);
         } catch (Exception e) {
             log.error("Failed to derive Ethereum wallet address", e);
             throw e;
         }
-    }
-
-    private byte[] keccak256(byte[] input) {
-        KeccakDigest digest = new KeccakDigest(256);
-        digest.update(input, 0, input.length);
-        byte[] hash = new byte[32];
-        digest.doFinal(hash, 0);
-        return hash;
     }
 
     private void validateStoredWalletMetadata(String derivedAddress) throws Exception {

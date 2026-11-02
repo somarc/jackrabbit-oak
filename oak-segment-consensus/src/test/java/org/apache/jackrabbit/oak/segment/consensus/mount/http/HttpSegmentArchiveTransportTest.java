@@ -350,10 +350,5 @@ public class HttpSegmentArchiveTransportTest {
             }
             return headStatus != null ? headStatus : existsResult ? 200 : 404;
         }
-
-        @Override
-        public String getPoolStats() {
-            return "stub";
-        }
     }
 }

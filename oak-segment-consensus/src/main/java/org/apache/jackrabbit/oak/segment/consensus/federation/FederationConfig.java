@@ -67,7 +67,7 @@ public final class FederationConfig {
             String mode = read("oak.federation.mode", "OAK_FEDERATION_MODE",
                 BlockchainConfig.getInstance().getMode().getKey());
             long chainId = Long.parseLong(read("oak.federation.chainId", "OAK_FEDERATION_CHAIN_ID",
-                Long.toString(defaultChainId(mode))));
+                Long.toString(BlockchainConfig.Mode.fromString(mode).getExpectedChainId())));
             String registry = read("oak.federation.registry", "OAK_FEDERATION_REGISTRY",
                 "mock".equals(mode) || "local".equals(mode) ? Charter.STATIC_REGISTRY : "");
             charter = Charter.of(enterpriseId, mode, chainId, registry);
@@ -115,19 +115,6 @@ public final class FederationConfig {
     /** {@code oak.federation.pollMs}, at least one second. */
     public static long pollMsFromRuntime() {
         return Math.max(1000L, RuntimeConfigValueResolver.readLong("oak.federation.pollMs", DEFAULT_POLL_MS));
-    }
-
-    static long defaultChainId(String mode) {
-        switch (mode) {
-            case "mainnet":
-                return 1L;
-            case "sepolia":
-                return 11155111L;
-            case "local":
-                return 31337L;
-            default:
-                return 0L;
-        }
     }
 
     private static String read(String property, String env, String defaultValue) {

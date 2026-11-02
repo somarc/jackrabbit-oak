@@ -35,10 +35,6 @@ final class AeronIngressEndpointPlanner {
     private final AeronClusterAddressResolver.HostnameResolver hostnameResolver;
     private final AeronClusterAddressResolver.LocalAddressProvider localAddressProvider;
 
-    static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname) {
-        return system(clusterHostnames, clientHostname, AeronClusterLauncher.getPortBase());
-    }
-
     static AeronIngressEndpointPlanner systemFromUrls(String selfUrl, List<String> peerUrls) {
         return fromUrls(selfUrl, peerUrls, hostname -> InetAddress.getByName(hostname).getHostAddress(),
             AeronClusterAddressResolver.systemLocalAddressProvider());
@@ -56,16 +52,6 @@ final class AeronIngressEndpointPlanner {
         );
     }
 
-    static AeronIngressEndpointPlanner system(List<String> clusterHostnames, String clientHostname, int clusterBasePort) {
-        return new AeronIngressEndpointPlanner(
-            clusterHostnames,
-            clientHostname,
-            clusterBasePort,
-            hostname -> InetAddress.getByName(hostname).getHostAddress(),
-            AeronClusterAddressResolver.systemLocalAddressProvider()
-        );
-    }
-
     AeronIngressEndpointPlanner(List<String> clusterHostnames,
                                 String clientHostname,
                                 AeronClusterAddressResolver.HostnameResolver hostnameResolver,
@@ -73,7 +59,7 @@ final class AeronIngressEndpointPlanner {
         this(
             clusterHostnames,
             clientHostname,
-            AeronClusterLauncher.getPortBase(),
+            AeronClusterTopology.getPortBase(),
             hostnameResolver,
             localAddressProvider
         );
@@ -101,10 +87,10 @@ final class AeronIngressEndpointPlanner {
             }
             String hostname = clusterHostnames.get(i);
             String ip = resolveIngressAddress(hostname, validatorSubnet);
-            int clientPort = AeronClusterLauncher.calculatePort(
+            int clientPort = AeronClusterTopology.calculatePort(
                 clusterBasePort,
                 i,
-                AeronClusterLauncher.CLIENT_FACING_PORT_OFFSET
+                AeronClusterTopology.CLIENT_FACING_PORT_OFFSET
             );
             ingressEndpoints.append(i).append("=").append(ip).append(":").append(clientPort);
             log.info("   Node {} ingress endpoint: {}:{}", i, ip, clientPort);

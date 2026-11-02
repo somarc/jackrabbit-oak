@@ -17,25 +17,20 @@
 package org.apache.jackrabbit.oak.segment.consensus.eth;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
-import org.apache.jackrabbit.oak.segment.consensus.config.RuntimeConfigValueResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Caches and polls Ethereum Beacon Chain epoch data.
  *
- * <p>Epoch fetching is delegated to a {@link FallbackBeaconChainProvider}.
- * Mock mode uses a local clock-backed provider. Chain-backed modes try
- * providers in priority order (local beacon node → beaconcha.in) with
- * per-provider circuit breakers (ADR 081 Track 6a).
- *
- * <p>The public API and the package-private test constructor are preserved from
- * the single-provider implementation.
+ * <p>Mock and local modes derive epochs from the local clock; Sepolia and mainnet poll beaconcha.in
+ * every minute. Reads use the cached values, so a failing poll only keeps the last (or calculated) epoch.
  */
 public class BeaconChainClient {
 
@@ -45,7 +40,7 @@ public class BeaconChainClient {
     private static final long POLL_INTERVAL_MS  = 60_000L;  // 1 minute
 
     private final BlockchainConfig.Mode networkMode;
-    private final FallbackBeaconChainProvider provider;
+    private final BeaconChainProvider provider;
 
     // Cached epoch state
     private volatile long cachedFinalizedEpoch = -1;
@@ -57,33 +52,18 @@ public class BeaconChainClient {
 
     // ── constructors ─────────────────────────────────────────────────────────
 
-    /**
-     * Production constructor. Reads {@code BEACON_LOCAL_NODE_URL} /
-     * {@code beacon.local.node.url} for an optional higher-priority local
-     * beacon node in chain-backed modes. Mock mode never performs Beacon HTTP.
-     */
+    /** Production constructor. Mock and local modes never perform Beacon HTTP. */
     public BeaconChainClient() {
-        this(BlockchainConfig.getInstance().getMode());
-    }
-
-    private BeaconChainClient(BlockchainConfig.Mode mode) {
-        this(mode, buildDefaultProvider(mode));
+        this(BlockchainConfig.getInstance().getMode(), HttpFetcher::httpGet);
     }
 
     /** Package-private: used by tests to inject a mock {@link HttpFetcher}. */
     BeaconChainClient(BlockchainConfig.Mode mode, HttpFetcher fetcher) {
-        this(mode, mode.usesLocalClockEpochs()
-            ? buildMockProvider()
-            : new FallbackBeaconChainProvider(
-                new CircuitBreakingBeaconProvider(
-                    new BeaconchainDotInProvider(modeToApiUrl(mode), fetcher),
-                    Integer.MAX_VALUE, Long.MAX_VALUE))); // never open in tests
-    }
-
-    BeaconChainClient(BlockchainConfig.Mode mode, FallbackBeaconChainProvider provider) {
         this.networkMode = mode;
-        this.provider    = provider;
-        log.info("Beacon Chain Client: mode={}, providers={}", mode, provider.getProviderNames());
+        this.provider = mode.usesLocalClockEpochs()
+            ? new ClockBeaconChainProvider()
+            : new BeaconchainDotInProvider(modeToApiUrl(mode), fetcher);
+        log.info("Beacon Chain Client: mode={}, provider={}", mode, provider.name());
         updateCachedEpochs();
     }
 
@@ -107,8 +87,8 @@ public class BeaconChainClient {
             }
         }, POLL_INTERVAL_MS, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
-        log.info("Epoch refresh scheduled (interval={}s, providers={}, externalNetworkPolling={})",
-            POLL_INTERVAL_MS / 1000, provider.getProviderNames(), !networkMode.usesLocalClockEpochs());
+        log.info("Epoch refresh scheduled (interval={}s, provider={}, externalNetworkPolling={})",
+            POLL_INTERVAL_MS / 1000, provider.name(), !networkMode.usesLocalClockEpochs());
     }
 
     public void stopBackgroundPolling() {
@@ -157,9 +137,9 @@ public class BeaconChainClient {
         long genesisMs = (networkMode == BlockchainConfig.Mode.MAINNET)
             ? 1_606_824_023_000L   // mainnet genesis: Dec 1 2020
             : 1_655_733_600_000L;  // sepolia genesis: Jun 20 2022
-        long current   = (System.currentTimeMillis() - genesisMs) / EPOCH_DURATION_MS;
-        cachedFinalizedEpoch = Math.max(0L, current - 2);
-        cachedCurrentEpoch   = current;
+        cachedFinalizedEpoch = new ClockBeaconChainProvider(genesisMs, EPOCH_DURATION_MS, System::currentTimeMillis)
+            .fetchFinalizedEpoch();
+        cachedCurrentEpoch   = cachedFinalizedEpoch + 2;
         lastUpdateTime       = System.currentTimeMillis();
         log.warn("Using calculated epoch fallback: finalized={}, current={}",
             cachedFinalizedEpoch, cachedCurrentEpoch);
@@ -177,7 +157,7 @@ public class BeaconChainClient {
     public Map<String, Object> getHealthStatus() {
         Map<String, Object> h = new HashMap<>();
         h.put("mode",              networkMode.toString());
-        h.put("providers",         provider.getProviderNames());
+        h.put("providers",         List.of(provider.name()));
         h.put("fresh",             isEpochDataFresh());
         h.put("currentEpoch",      cachedCurrentEpoch);
         h.put("finalizedEpoch",    cachedFinalizedEpoch);
@@ -196,19 +176,5 @@ public class BeaconChainClient {
         return mode == BlockchainConfig.Mode.MAINNET
             ? BeaconchainDotInProvider.MAINNET_BASE
             : BeaconchainDotInProvider.SEPOLIA_BASE;
-    }
-
-    private static FallbackBeaconChainProvider buildDefaultProvider(BlockchainConfig.Mode mode) {
-        if (mode.usesLocalClockEpochs()) {
-            return buildMockProvider();
-        }
-        return FallbackBeaconChainProvider.buildDefault(
-            modeToApiUrl(mode),
-            RuntimeConfigValueResolver.readString(
-                "beacon.local.node.url", "BEACON_LOCAL_NODE_URL", ""));
-    }
-
-    private static FallbackBeaconChainProvider buildMockProvider() {
-        return new FallbackBeaconChainProvider(new ClockBeaconChainProvider());
     }
 }

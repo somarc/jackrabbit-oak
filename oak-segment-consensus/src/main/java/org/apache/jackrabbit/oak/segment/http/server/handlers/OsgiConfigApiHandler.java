@@ -376,14 +376,6 @@ public class OsgiConfigApiHandler {
             "ConsensusModule max concurrent sessions override",
             "oak.cluster.max.concurrent.sessions"));
         schema.add(schemaEntry(
-            "aeronClusterTuning.delete_aeron_dirs_on_startup",
-            "boolean",
-            false,
-            "startup-only",
-            "expert-only",
-            "Delete Aeron runtime dirs during startup",
-            "aeron.delete.dirs.on.startup"));
-        schema.add(schemaEntry(
             "aeronClusterTuning.cluster_base_port",
             "int",
             9000,

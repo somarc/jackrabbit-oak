@@ -16,11 +16,15 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.security;
 
+import org.bouncycastle.crypto.ec.CustomNamedCurves;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.web3j.crypto.Credentials;
+import org.web3j.crypto.Keys;
 import org.web3j.crypto.Sign;
+import org.web3j.utils.Numeric;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.*;
@@ -246,6 +250,128 @@ public class EthereumSignatureVerifierTest {
                 Sign.getEthereumMessageHash(message.getBytes(StandardCharsets.UTF_8)),
                 EthereumSignatureVerifier.hashMessage(message));
         }
+    }
+
+    private static final BigInteger N = new BigInteger(
+        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16);
+    private static final String MESSAGE = "write /oak-chain/aa/bb/cc/0xabc/content/page";
+
+    @Test
+    public void testValidSignatureIsAccepted() {
+        Credentials credentials = Credentials.create(TEST_PRIVATE_KEY);
+        Sign.SignatureData sig = sign(MESSAGE);
+        assertTrue(EthereumSignatureVerifier.verifySignature(MESSAGE, signatureHex(sig), credentials.getAddress()));
+        assertTrue("addresses compare case-insensitively", EthereumSignatureVerifier.verifySignature(
+            MESSAGE, signatureHex(sig).toUpperCase().replace("0X", "0x"), credentials.getAddress().toUpperCase()));
+    }
+
+    @Test
+    public void testExpectedAddressWithoutPrefixIsAccepted() {
+        Credentials credentials = Credentials.create(TEST_PRIVATE_KEY);
+        assertTrue(EthereumSignatureVerifier.verifySignature(MESSAGE, signatureHex(sign(MESSAGE)),
+            credentials.getAddress().substring(2)));
+    }
+
+    @Test
+    public void testFailsClosedWhenBouncyCastleIsUnavailable() throws Exception {
+        java.lang.reflect.Field available = EthereumSignatureVerifier.class.getDeclaredField("bouncyCastleAvailable");
+        available.setAccessible(true);
+        available.setBoolean(null, false);
+        try {
+            assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE, signatureHex(sign(MESSAGE)),
+                Credentials.create(TEST_PRIVATE_KEY).getAddress()));
+        } finally {
+            available.setBoolean(null, true);
+        }
+    }
+
+    @Test
+    public void testZeroOneRecoveryIdIsAcceptedAs27Or28() {
+        Sign.SignatureData sig = sign(MESSAGE);
+        byte zeroBased = (byte) (sig.getV()[0] - 27);
+        assertTrue(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(sig.getR(), sig.getS(), zeroBased), Credentials.create(TEST_PRIVATE_KEY).getAddress()));
+    }
+
+    /** The malleated twin (r, n - s, v ^ 1) recovers the same signer, so only the explicit low-s rule rejects it. */
+    @Test
+    public void testMalleatedSignatureIsRejected() throws Exception {
+        String address = Credentials.create(TEST_PRIVATE_KEY).getAddress();
+        Sign.SignatureData sig = sign(MESSAGE);
+        byte[] highS = Numeric.toBytesPadded(N.subtract(new BigInteger(1, sig.getS())), 32);
+        byte flippedV = (byte) (55 - sig.getV()[0]);
+        BigInteger recovered = Sign.signedPrefixedMessageToKey(MESSAGE.getBytes(StandardCharsets.UTF_8),
+            new Sign.SignatureData(flippedV, sig.getR(), highS));
+        assertEquals("precondition: recovery alone accepts the twin",
+            address.substring(2), Keys.getAddress(recovered));
+
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(sig.getR(), highS, flippedV), address));
+    }
+
+    @Test
+    public void testHighSIsRejected() {
+        String address = Credentials.create(TEST_PRIVATE_KEY).getAddress();
+        Sign.SignatureData sig = sign(MESSAGE);
+        byte[] highS = Numeric.toBytesPadded(N.subtract(new BigInteger(1, sig.getS())), 32);
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(sig.getR(), highS, sig.getV()[0]), address));
+        byte[] halfNPlusOne = Numeric.toBytesPadded(N.shiftRight(1).add(BigInteger.ONE), 32);
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(sig.getR(), halfNPlusOne, sig.getV()[0]), address));
+    }
+
+    @Test
+    public void testOutOfRangeRAndZeroSAreRejected() {
+        String address = Credentials.create(TEST_PRIVATE_KEY).getAddress();
+        Sign.SignatureData sig = sign(MESSAGE);
+        byte[] zero = new byte[32];
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(zero, sig.getS(), sig.getV()[0]), address));
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(Numeric.toBytesPadded(N, 32), sig.getS(), sig.getV()[0]), address));
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(sig.getR(), zero, sig.getV()[0]), address));
+    }
+
+    @Test
+    public void testWrongAddressIsRejected() {
+        Sign.SignatureData sig = sign(MESSAGE);
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE, signatureHex(sig),
+            Credentials.create("0x" + "11".repeat(32)).getAddress()));
+        assertFalse("a different message recovers a different signer",
+            EthereumSignatureVerifier.verifySignature(MESSAGE + "!", signatureHex(sig),
+                Credentials.create(TEST_PRIVATE_KEY).getAddress()));
+    }
+
+    @Test
+    public void testRWithoutACurvePointIsRejected() {
+        byte[] r = rWithoutCurvePoint();
+        assertFalse(EthereumSignatureVerifier.verifySignature(MESSAGE,
+            signatureHex(r, sign(MESSAGE).getS(), (byte) 27), Credentials.create(TEST_PRIVATE_KEY).getAddress()));
+    }
+
+    private static Sign.SignatureData sign(String message) {
+        return Sign.signPrefixedMessage(message.getBytes(StandardCharsets.UTF_8),
+            Credentials.create(TEST_PRIVATE_KEY).getEcKeyPair());
+    }
+
+    /** A small r that is not the x coordinate of any secp256k1 point, so recovery fails. */
+    private static byte[] rWithoutCurvePoint() {
+        for (int x = 1; ; x++) {
+            byte[] encoded = new byte[33];
+            encoded[0] = 0x02;
+            System.arraycopy(Numeric.toBytesPadded(BigInteger.valueOf(x), 32), 0, encoded, 1, 32);
+            try {
+                CustomNamedCurves.getByName("secp256k1").getCurve().decodePoint(encoded);
+            } catch (IllegalArgumentException e) {
+                return Numeric.toBytesPadded(BigInteger.valueOf(x), 32);
+            }
+        }
+    }
+
+    private static String signatureHex(byte[] r, byte[] s, byte v) {
+        return signatureHex(new Sign.SignatureData(v, r, s));
     }
 
     private static String signatureHex(Sign.SignatureData signatureData) {

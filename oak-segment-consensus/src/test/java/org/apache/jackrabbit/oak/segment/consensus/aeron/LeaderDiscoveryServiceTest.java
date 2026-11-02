@@ -28,7 +28,6 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -46,7 +45,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testNotifyBecameLeaderUpdatesKnownAndCache() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setSelfUrl("http://localhost:8090");
 
         service.notifyBecameLeader(3);
@@ -59,7 +58,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testInvalidateCacheClearsCachedLeader() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setKnownLeader("http://localhost:8090", 1);
 
         service.invalidateCache();
@@ -70,15 +69,15 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testBestKnownLeaderPrefersKnown() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setKnownLeader("http://leader-1:8090", 2);
 
-        assertEquals("http://leader-1:8090", service.getBestKnownLeaderUrl());
+        assertEquals("http://leader-1:8090", service.getKnownLeaderHint());
     }
 
     @Test
     public void testNotifyLostLeadershipClearsTrackedLeaderState() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setSelfUrl("http://self:8090");
         service.notifyBecameLeader(2);
 
@@ -93,7 +92,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testDiscoverLeaderReturnsCachedLeaderBeforeInspectingCluster() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setKnownLeader("http://leader-1:8090", 2);
 
         Cluster cluster = mock(Cluster.class);
@@ -102,7 +101,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testDiscoverLeaderUsesClusterRoleAndTrackedLeader() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setSelfUrl("http://self:8090");
 
         Cluster leaderCluster = mock(Cluster.class);
@@ -119,7 +118,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testLostLeadershipKeepsNewerLeaderAlreadyKnownFromLog() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         service.setSelfUrl("http://self:8090");
         service.notifyBecameLeader(0);
         service.setKnownLeader("http://leader-2:8090", 2);
@@ -139,37 +138,35 @@ public class LeaderDiscoveryServiceTest {
         );
         try {
             String peerUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/ngrok";
-            LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), List.of(peerUrl));
+            LeaderDiscoveryService service = new LeaderDiscoveryService(List.of(peerUrl));
 
             assertEquals("http://leader-polled:8090", service.discoverLeader(null));
             assertEquals("http://leader-polled:8090", service.getCachedLeaderUrl());
 
-            service.deactivate();
+            service.invalidateCache();
 
             assertNull(service.getCachedLeaderUrl());
-            assertNull(service.getBestKnownLeaderUrl());
+            assertNull(service.getKnownLeaderHint());
         } finally {
             server.stop(0);
         }
     }
 
     @Test
-    public void testActivateSettersAndPeerLeaderPollingPaths() throws Exception {
+    public void testPeerLeaderPollingPaths() throws Exception {
         HttpServer server = startServer(
             "/v1/aeron/cluster-state",
             200,
             "{\"role\":\"LEADER\"}"
         );
         try {
-            LeaderDiscoveryService service = new LeaderDiscoveryService();
-            service.setNodeIdMapping(Map.of(1, "http://leader-1:8090"));
-            service.setPeerUrls(List.of("http://127.0.0.1:" + server.getAddress().getPort()));
+            LeaderDiscoveryService service = new LeaderDiscoveryService(
+                List.of("http://127.0.0.1:" + server.getAddress().getPort()));
             service.setSelfUrl("http://self:8090");
-            service.activate();
 
             assertEquals("http://127.0.0.1:" + server.getAddress().getPort(), service.discoverLeader(null));
             assertEquals("http://127.0.0.1:" + server.getAddress().getPort(), service.getKnownLeaderHint());
-            assertEquals("http://127.0.0.1:" + server.getAddress().getPort(), service.getBestKnownLeaderUrl());
+            assertEquals("http://127.0.0.1:" + server.getAddress().getPort(), service.getKnownLeaderHint());
         } finally {
             server.stop(0);
         }
@@ -177,7 +174,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testDiscoverLeaderHandlesUnreachablePeers() {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), List.of("http://127.0.0.1:1"));
+        LeaderDiscoveryService service = new LeaderDiscoveryService(List.of("http://127.0.0.1:1"));
         Cluster follower = mock(Cluster.class);
         when(follower.role()).thenReturn(Cluster.Role.FOLLOWER);
 
@@ -188,7 +185,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testPrivateJsonExtractionBranches() throws Exception {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
 
         assertEquals("LEADER", extractJsonField(service, "{\"role\":\"LEADER\"}", "role"));
         assertEquals("null", extractJsonField(service, "{\"leaderUrl\":null}", "leaderUrl"));
@@ -199,7 +196,7 @@ public class LeaderDiscoveryServiceTest {
 
     @Test
     public void testKnownLeaderHintCanFallBackToCacheOnly() throws Exception {
-        LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), Collections.emptyList());
+        LeaderDiscoveryService service = new LeaderDiscoveryService(Collections.emptyList());
         setField(service, "cachedLeaderUrl", "http://cached-only:8090");
         setField(service, "cachedLeaderTimestamp", System.currentTimeMillis());
         setField(service, "knownLeaderUrl", null);
@@ -220,11 +217,12 @@ public class LeaderDiscoveryServiceTest {
         AtomicInteger maxInFlight = new AtomicInteger();
         AtomicInteger followerQueries = new AtomicInteger();
         LeaderDiscoveryService[] nodes = new LeaderDiscoveryService[2];
+        List<List<String>> peers = List.of(new ArrayList<>(), new ArrayList<>());
         HttpServer[] stubs = new HttpServer[2];
         HttpServer leader = startServer("/v1/consensus/leader", 200, "{\"isLeader\":true}");
         try {
             for (int i = 0; i < 2; i++) {
-                LeaderDiscoveryService self = nodes[i] = new LeaderDiscoveryService(new HashMap<>(), new ArrayList<>());
+                LeaderDiscoveryService self = nodes[i] = new LeaderDiscoveryService(peers.get(i));
                 stubs[i] = startLeaderEndpoint(exchange -> {
                     followerQueries.incrementAndGet();
                     int depth = inFlight.incrementAndGet();
@@ -243,8 +241,8 @@ public class LeaderDiscoveryServiceTest {
                 });
             }
             String leaderUrl = url(leader);
-            nodes[0].setPeerUrls(List.of(url(stubs[1]), leaderUrl));
-            nodes[1].setPeerUrls(List.of(url(stubs[0]), leaderUrl));
+            peers.get(0).addAll(List.of(url(stubs[1]), leaderUrl));
+            peers.get(1).addAll(List.of(url(stubs[0]), leaderUrl));
 
             long start = System.nanoTime();
             assertEquals(leaderUrl, nodes[0].discoverLeader(follower.role()));
@@ -276,7 +274,7 @@ public class LeaderDiscoveryServiceTest {
         ExecutorService pool = Executors.newFixedThreadPool(callers);
         try {
             String leaderUrl = url(leader);
-            LeaderDiscoveryService service = new LeaderDiscoveryService(new HashMap<>(), List.of(leaderUrl));
+            LeaderDiscoveryService service = new LeaderDiscoveryService(List.of(leaderUrl));
             Cluster follower = mock(Cluster.class);
             when(follower.role()).thenReturn(Cluster.Role.FOLLOWER);
 

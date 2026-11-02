@@ -54,7 +54,7 @@ public class AeronGenesisInitializerTest {
         AeronGenesisInitializer.GenesisProposal proposal = AeronGenesisInitializer.GenesisProposal
             .create(123456789L, "http://leader:8090");
 
-        initializer.initializeGenesisContent(proposal);
+        initializer.initializeGenesisContent(proposal, null);
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
         NodeState imageContent = genesis.getChildNode("do-it-live.jpeg").getChildNode("jcr:content");
@@ -100,7 +100,8 @@ public class AeronGenesisInitializerTest {
 
         AeronGenesisInitializer initializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(42L, "https://validator.example:8090")
+            AeronGenesisInitializer.GenesisProposal.create(42L, "https://validator.example:8090"),
+            null
         );
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());
@@ -125,10 +126,12 @@ public class AeronGenesisInitializerTest {
 
         AeronGenesisInitializer initializer = new AeronGenesisInitializer(fileStore, nodeStore, blobStore);
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(10L, "http://leader-0:8090")
+            AeronGenesisInitializer.GenesisProposal.create(10L, "http://leader-0:8090"),
+            null
         );
         initializer.initializeGenesisContent(
-            AeronGenesisInitializer.GenesisProposal.create(20L, "http://leader-1:8090")
+            AeronGenesisInitializer.GenesisProposal.create(20L, "http://leader-1:8090"),
+            null
         );
 
         NodeState genesis = getGenesisNode(nodeStore.getRoot());

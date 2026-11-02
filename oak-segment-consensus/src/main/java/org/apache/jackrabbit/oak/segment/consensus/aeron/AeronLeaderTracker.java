@@ -16,9 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import io.aeron.cluster.service.Cluster;
-import org.osgi.service.component.annotations.Component;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -27,7 +24,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * Tracks leadership changes and delegates leader discovery notifications.
  */
-@Component(service = AeronLeaderTracker.class)
 public class AeronLeaderTracker {
 
     private static final int MAX_HISTORY_ENTRIES = 100;
@@ -40,39 +36,19 @@ public class AeronLeaderTracker {
     }
 
     public void invalidateCache() {
-        if (leaderDiscoveryService != null) {
-            leaderDiscoveryService.invalidateCache();
-        }
+        leaderDiscoveryService.invalidateCache();
     }
 
     public void notifyBecameLeader(int memberId) {
-        if (leaderDiscoveryService != null) {
-            leaderDiscoveryService.notifyBecameLeader(memberId);
-        }
+        leaderDiscoveryService.notifyBecameLeader(memberId);
     }
 
     public void notifyLostLeadership() {
-        if (leaderDiscoveryService != null) {
-            leaderDiscoveryService.notifyLostLeadership();
-        }
+        leaderDiscoveryService.notifyLostLeadership();
     }
 
-    public void recordChange(Cluster.Role newRole,
-                             Cluster.Role previousRole,
-                             int term,
-                             int memberId,
-                             String memberUrl,
-                             long timestamp,
-                             long clusterTime) {
-        leadershipHistory.add(new LeadershipChange(
-            timestamp,
-            clusterTime,
-            newRole,
-            previousRole,
-            term,
-            memberId,
-            memberUrl
-        ));
+    public void recordChange(LeadershipChange change) {
+        leadershipHistory.add(change);
         if (leadershipHistory.size() > MAX_HISTORY_ENTRIES) {
             leadershipHistory.remove(0);
         }

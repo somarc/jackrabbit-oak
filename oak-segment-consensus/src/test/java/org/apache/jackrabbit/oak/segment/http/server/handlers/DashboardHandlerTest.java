@@ -89,7 +89,7 @@ public class DashboardHandlerTest {
         assertFalse(json.contains("\"path\":\"/v1/proposals/epochs\""));
         assertFalse(json.contains("\"path\":\"/v1/explorer/epochs\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/summary\""));
-        assertTrue(json.contains("\"path\":\"/v1/explorer/release-flow\""));
+        assertFalse(json.contains("\"path\":\"/v1/explorer/release-flow\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/content/nav\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/content/clusters/{clusterId}/tree\""));
         assertTrue(json.contains("\"path\":\"/v1/explorer/content/clusters/{clusterId}/node\""));
@@ -109,7 +109,11 @@ public class DashboardHandlerTest {
         assertTrue(json.contains("\"path\":\"/metrics\""));
         assertTrue(json.contains("\"path\":\"/api/cid/stats\",\"description\":\"CID mapping stats\",\"category\":\"Storage\""));
         assertTrue(json.contains("\"path\":\"/v1/proposals/{id}/status\",\"description\":\"Proposal status by id (short-term: proposals this validator queued, until retention eviction)\""));
-        assertTrue(json.contains("\"path\":\"/api/segments/tars\",\"description\":\"TAR file listing\",\"category\":\"Storage\""));
+        assertFalse(json.contains("\"path\":\"/api/segments/tars\""));
+        assertFalse(json.contains("\"path\":\"/api/segments/recent\""));
+        assertFalse(json.contains("\"path\":\"/api/metrics\""));
+        assertFalse(json.contains("\"path\":\"/v1/aeron/validator-identities\""));
+        assertFalse(json.contains("\"path\":\"/v1/binary/declare-intent\""));
         assertFalse(json.contains("/api/mock/advance-epoch"));
         assertFalse(json.contains("/api/mock/set-epoch-offset"));
         assertFalse(json.contains("/api/mock/epoch-status"));

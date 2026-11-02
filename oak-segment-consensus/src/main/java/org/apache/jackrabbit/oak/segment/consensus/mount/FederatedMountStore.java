@@ -62,7 +62,7 @@ final class FederatedMountStore implements NodeStore, Closeable {
     }
 
     static final EndpointStoreFactory HTTP_ENDPOINTS = (url, mountName, breaker) ->
-        new LazyHttpNodeStore(url, mountName, 5_000L, 30_000L, breaker, LazyHttpNodeStore::createRemoteNodeStore);
+        new LazyHttpNodeStore(url, mountName, breaker, LazyHttpNodeStore::createRemoteNodeStore);
 
     private final String enterpriseId;
     private final String clusterId;

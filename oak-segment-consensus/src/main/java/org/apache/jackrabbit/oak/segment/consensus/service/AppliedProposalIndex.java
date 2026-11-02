@@ -100,36 +100,6 @@ public final class AppliedProposalIndex {
     }
 
     /** A proposal that has taken effect: its id, kind ({@code WRITE} or {@code DELETE}), path and log time. */
-    public static final class Entry {
-        private final String proposalId;
-        private final String kind;
-        private final String path;
-        private final long appliedAt;
-
-        Entry(@NotNull String proposalId, @Nullable String kind, @Nullable String path, long appliedAt) {
-            this.proposalId = proposalId;
-            this.kind = kind;
-            this.path = path;
-            this.appliedAt = appliedAt;
-        }
-
-        @NotNull
-        public String proposalId() {
-            return proposalId;
-        }
-
-        @Nullable
-        public String kind() {
-            return kind;
-        }
-
-        @Nullable
-        public String path() {
-            return path;
-        }
-
-        public long appliedAt() {
-            return appliedAt;
-        }
+    public record Entry(@NotNull String proposalId, @Nullable String kind, @Nullable String path, long appliedAt) {
     }
 }

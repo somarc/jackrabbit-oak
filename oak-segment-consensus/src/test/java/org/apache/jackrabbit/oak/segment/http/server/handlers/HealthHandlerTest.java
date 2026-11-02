@@ -31,6 +31,7 @@ import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
@@ -42,6 +43,8 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
@@ -51,6 +54,34 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.*;
 
 public class HealthHandlerTest {
+
+    @Test
+    public void testAddTarEntriesReturnsTarMetadata() throws Exception {
+        Path dir = Files.createTempDirectory("health-tars");
+        try {
+            Files.write(dir.resolve("journal.log"), Arrays.asList(
+                "seg-001 now",
+                "seg-002 later",
+                "seg-003 later"
+            ));
+            Files.write(dir.resolve("data00000a.tar"), new byte[16]);
+            Files.write(dir.resolve("data00001a.tar"), new byte[32]);
+
+            List<Map<String, Object>> entries = new ArrayList<>();
+            HealthHandler.addTarEntries(dir, entries);
+
+            String json = JsonOutputUtil.toJson(entries);
+            assertTrue(json.contains("\"name\":\"data00000a.tar\""));
+            assertTrue(json.contains("\"name\":\"data00001a.tar\""));
+            assertTrue(json.contains("\"estimatedCount\":true"));
+            assertTrue(json.contains("\"size\":16"));
+            assertTrue(json.contains("\"size\":32"));
+        } finally {
+            try (java.util.stream.Stream<Path> paths = Files.walk(dir)) {
+                paths.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+            }
+        }
+    }
 
     @Test
     public void testHandleHealthHealthyWithoutEngine() throws Exception {
@@ -447,8 +478,6 @@ public class HealthHandlerTest {
         when(healthMonitor.getHealthStatus()).thenReturn("DEGRADED");
         when(healthMonitor.getErrorCount()).thenReturn(2L);
         when(healthMonitor.getTimeoutCount()).thenReturn(3L);
-        when(healthMonitor.getBackpressureCount()).thenReturn(4L);
-        when(healthMonitor.getFreeSpaceMB()).thenReturn(512L);
 
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         when(launcher.getCrashHandler()).thenReturn(crashHandler);

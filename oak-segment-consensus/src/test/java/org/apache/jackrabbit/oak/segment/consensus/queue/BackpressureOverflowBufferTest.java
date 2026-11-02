@@ -25,7 +25,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 public class BackpressureOverflowBufferTest {
 
@@ -71,7 +70,7 @@ public class BackpressureOverflowBufferTest {
         assertEquals(1, buffer.getPendingBatchCount());
         assertEquals(1L, buffer.getPendingProposalCount());
         assertEquals(1, target.size());
-        assertTrue(buffer.getStats().contains("Pending Batches: 1"));
+        assertEquals(1, buffer.getStatsMap().get("pendingBatches"));
     }
 
     private static QueuedProposal buildProposal(String proposalId, long timestamp) {

@@ -19,6 +19,8 @@ package org.apache.jackrabbit.oak.segment.consensus.security;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.web3j.crypto.Keys;
+import org.web3j.crypto.Sign;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -30,13 +32,13 @@ import java.util.HexFormat;
  * Ethereum signature verifier for MetaMask personal_sign signatures.
  * 
  * <p>Verifies signatures created by MetaMask's personal_sign method, which uses
- * the Ethereum standard message prefix and secp256k1 ECDSA.
+ * the Ethereum standard message prefix and secp256k1 ECDSA. Signer recovery uses web3j.
  * 
  * <p>Signature format (65 bytes):
  * <ul>
- *   <li>r: 32 bytes (signature component)</li>
- *   <li>s: 32 bytes (signature component)</li>
- *   <li>v: 1 byte (recovery id, 27 or 28)</li>
+ *   <li>r: 32 bytes, {@code 0 < r < n}</li>
+ *   <li>s: 32 bytes, {@code 0 < s <= n/2} (EIP-2 low-s; the malleated high-s twin is rejected)</li>
+ *   <li>v: 1 byte (recovery id, 27 or 28; 0 and 1 are accepted as 27 and 28)</li>
  * </ul>
  * 
  * <p>Message format (Ethereum personal_sign):
@@ -45,15 +47,13 @@ import java.util.HexFormat;
  * </pre>
  * 
  * @see <a href="https://eips.ethereum.org/EIPS/eip-191">EIP-191: Signed Data Standard</a>
+ * @see <a href="https://eips.ethereum.org/EIPS/eip-2">EIP-2: low-s signatures</a>
  */
 public class EthereumSignatureVerifier {
     
     private static final Logger log = LoggerFactory.getLogger(EthereumSignatureVerifier.class);
     
-    // Ethereum message prefix for personal_sign
-    private static final String ETHEREUM_MESSAGE_PREFIX = "\u0019Ethereum Signed Message:\n";
-    
-    // secp256k1 curve parameters
+    // secp256k1 curve order
     private static final BigInteger SECP256K1_N = new BigInteger(
         "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16);
     private static final BigInteger SECP256K1_HALF_N = SECP256K1_N.shiftRight(1);
@@ -130,19 +130,23 @@ public class EthereumSignatureVerifier {
                 log.warn("❌ Invalid recovery id v={}", v);
                 return false;
             }
-            
-            // Hash the message with Ethereum prefix
-            byte[] messageHash = hashMessage(message);
-            
-            // Recover public key from signature
-            byte[] recoveredPubKey = recoverPublicKey(messageHash, r, s, v - 27);
-            if (recoveredPubKey == null) {
-                log.warn("❌ Failed to recover public key from signature");
+
+            // Only canonical signatures: 0 < r < n and 0 < s <= n/2. Recovery alone would also accept the
+            // malleated twin (r, n - s, v ^ 1) of a valid signature.
+            BigInteger rValue = new BigInteger(1, r);
+            BigInteger sValue = new BigInteger(1, s);
+            if (rValue.signum() == 0 || rValue.compareTo(SECP256K1_N) >= 0) {
+                log.warn("❌ Invalid signature: r out of range");
                 return false;
             }
-            
-            // Derive address from public key
-            String recoveredAddress = publicKeyToAddress(recoveredPubKey);
+            if (sValue.signum() == 0 || sValue.compareTo(SECP256K1_HALF_N) > 0) {
+                log.warn("❌ Invalid signature: s is zero or in the upper half of the curve order (EIP-2)");
+                return false;
+            }
+
+            BigInteger publicKey = Sign.signedPrefixedMessageToKey(
+                message.getBytes(StandardCharsets.UTF_8), new Sign.SignatureData((byte) v, r, s));
+            String recoveredAddress = Keys.getAddress(publicKey);
             
             // Compare addresses (case-insensitive)
             boolean matches = recoveredAddress.equalsIgnoreCase(normalizedAddress);
@@ -158,7 +162,7 @@ public class EthereumSignatureVerifier {
             return matches;
             
         } catch (Exception e) {
-            log.error("❌ Signature verification error", e);
+            log.warn("❌ Signature verification error: {}", e.toString());
             return false;
         }
     }
@@ -169,139 +173,8 @@ public class EthereumSignatureVerifier {
      * @param message The message to hash
      * @return Keccak-256 hash of the prefixed message
      */
-    public static byte[] hashMessage(String message) throws Exception {
-        int utf8Length = message.getBytes(StandardCharsets.UTF_8).length;
-        String prefixedMessage = ETHEREUM_MESSAGE_PREFIX + utf8Length + message;
-        return keccak256(prefixedMessage.getBytes(StandardCharsets.UTF_8));
-    }
-    
-    /**
-     * Recover the public key from an ECDSA signature.
-     * 
-     * @param messageHash The hash of the signed message
-     * @param r Signature component r (32 bytes)
-     * @param s Signature component s (32 bytes)
-     * @param recoveryId Recovery id (0 or 1)
-     * @return The recovered public key (64 bytes, uncompressed without 0x04 prefix)
-     */
-    private static byte[] recoverPublicKey(byte[] messageHash, byte[] r, byte[] s, int recoveryId) {
-        requireFullVerificationAvailable();
-        
-        try {
-            BigInteger rBigInt = new BigInteger(1, r);
-            BigInteger sBigInt = new BigInteger(1, s);
-            
-            // Validate s is in lower half of curve order (EIP-2)
-            if (sBigInt.compareTo(SECP256K1_HALF_N) > 0) {
-                log.debug("Normalizing s value (was in upper half)");
-                sBigInt = SECP256K1_N.subtract(sBigInt);
-            }
-            
-            // Use Bouncy Castle for EC recovery
-            org.bouncycastle.crypto.params.ECDomainParameters ecParams = getSecp256k1Params();
-            org.bouncycastle.math.ec.ECPoint R = recoverPoint(ecParams, rBigInt, recoveryId);
-            
-            if (R == null) {
-                return null;
-            }
-            
-            BigInteger e = new BigInteger(1, messageHash);
-            BigInteger n = ecParams.getN();
-            BigInteger eInv = e.negate().mod(n);
-            BigInteger rInv = rBigInt.modInverse(n);
-            
-            // Q = r^-1 * (s*R - e*G)
-            org.bouncycastle.math.ec.ECPoint G = ecParams.getG();
-            org.bouncycastle.math.ec.ECPoint sR = R.multiply(sBigInt);
-            org.bouncycastle.math.ec.ECPoint eG = G.multiply(eInv);
-            org.bouncycastle.math.ec.ECPoint Q = sR.add(eG).multiply(rInv);
-            
-            // Get uncompressed public key (remove 0x04 prefix)
-            byte[] pubKeyFull = Q.getEncoded(false);
-            return Arrays.copyOfRange(pubKeyFull, 1, 65); // Remove 0x04 prefix
-            
-        } catch (Exception e) {
-            log.error("Failed to recover public key", e);
-            return null;
-        }
-    }
-    
-    /**
-     * Get secp256k1 curve parameters.
-     */
-    private static org.bouncycastle.crypto.params.ECDomainParameters getSecp256k1Params() {
-        org.bouncycastle.asn1.x9.X9ECParameters curveParams = 
-            org.bouncycastle.crypto.ec.CustomNamedCurves.getByName("secp256k1");
-        return new org.bouncycastle.crypto.params.ECDomainParameters(
-            curveParams.getCurve(),
-            curveParams.getG(),
-            curveParams.getN(),
-            curveParams.getH()
-        );
-    }
-    
-    /**
-     * Recover EC point R from signature component r and recovery id.
-     */
-    private static org.bouncycastle.math.ec.ECPoint recoverPoint(
-            org.bouncycastle.crypto.params.ECDomainParameters ecParams,
-            BigInteger r, int recoveryId) {
-        
-        BigInteger n = ecParams.getN();
-        BigInteger i = BigInteger.valueOf(recoveryId / 2);
-        BigInteger x = r.add(i.multiply(n));
-        
-        // Check x is valid
-        BigInteger prime = ecParams.getCurve().getField().getCharacteristic();
-        if (x.compareTo(prime) >= 0) {
-            return null;
-        }
-
-        // Decompress point
-        byte[] compressedPoint = new byte[33];
-        compressedPoint[0] = (byte) ((recoveryId & 1) == 0 ? 0x02 : 0x03);
-        byte[] xBytes = x.toByteArray();
-        
-        // Handle leading zero or padding
-        if (xBytes.length == 33) {
-            System.arraycopy(xBytes, 1, compressedPoint, 1, 32);
-        } else if (xBytes.length < 32) {
-            System.arraycopy(xBytes, 0, compressedPoint, 33 - xBytes.length, xBytes.length);
-        } else {
-            System.arraycopy(xBytes, 0, compressedPoint, 1, 32);
-        }
-        
-        try {
-            return ecParams.getCurve().decodePoint(compressedPoint);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Derive Ethereum address from public key.
-     * 
-     * @param publicKey 64-byte uncompressed public key (without 0x04 prefix)
-     * @return Ethereum address (40 hex chars, no 0x prefix)
-     */
-    private static String publicKeyToAddress(byte[] publicKey) throws Exception {
-        byte[] hash = keccak256(publicKey);
-        // Take last 20 bytes
-        byte[] addressBytes = Arrays.copyOfRange(hash, 12, 32);
-        return HexFormat.of().formatHex(addressBytes);
-    }
-    
-    /**
-     * Compute Keccak-256 hash.
-     */
-    private static byte[] keccak256(byte[] input) throws Exception {
-        requireFullVerificationAvailable();
-        org.bouncycastle.crypto.digests.KeccakDigest digest =
-            new org.bouncycastle.crypto.digests.KeccakDigest(256);
-        digest.update(input, 0, input.length);
-        byte[] hash = new byte[32];
-        digest.doFinal(hash, 0);
-        return hash;
+    public static byte[] hashMessage(String message) {
+        return Sign.getEthereumMessageHash(message.getBytes(StandardCharsets.UTF_8));
     }
     
     /**
@@ -311,15 +184,6 @@ public class EthereumSignatureVerifier {
      */
     public static boolean isFullVerificationAvailable() {
         return bouncyCastleAvailable;
-    }
-
-    /**
-     * Fail closed when Ethereum verification dependencies are unavailable.
-     */
-    public static void requireFullVerificationAvailable() {
-        if (!bouncyCastleAvailable) {
-            throw new IllegalStateException(getAvailabilityReason());
-        }
     }
 
     /**

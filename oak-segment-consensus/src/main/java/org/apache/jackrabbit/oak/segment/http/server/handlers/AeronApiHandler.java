@@ -16,6 +16,7 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.segment.consensus.server.ServerNetworkUtil;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonParser;
@@ -204,57 +205,6 @@ public class AeronApiHandler {
 
         response.setContentType("application/json");
         JsonOutputUtil.write(response, HttpServletResponse.SC_OK, state);
-    }
-
-    /**
-     * Handle GET /v1/aeron/validator-identities - Returns validator identity map across cluster members.
-     *
-     * Response includes per-validator:
-     * - memberId, nodeId, url, role, status
-     * - walletAddress, publicKey (when known)
-     */
-    public void handleValidatorIdentities(HttpServletResponse response) throws IOException {
-        Map<String, Object> data = getValidatorIdentitiesData();
-        if (data == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, NOT_CONFIGURED);
-            return;
-        }
-
-        response.setContentType("application/json");
-        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, data);
-    }
-    
-    /**
-     * Resolve hostname-based URL to IP-based URL for reliable networking.
-     */
-    private String resolveUrlToIP(String url) {
-        try {
-            java.net.URL parsedUrl = new java.net.URL(url);
-            String hostname = parsedUrl.getHost();
-            int port = parsedUrl.getPort();
-            String protocol = parsedUrl.getProtocol();
-            String path = parsedUrl.getPath();
-            
-            // If already an IP address, return as-is
-            if (hostname.matches("^\\d+\\.\\d+\\.\\d+\\.\\d+$")) {
-                return url;
-            }
-            
-            // Resolve hostname to IP
-            try {
-                String ip = java.net.InetAddress.getByName(hostname).getHostAddress();
-                return String.format("%s://%s%s%s",
-                    protocol,
-                    ip,
-                    port != -1 ? ":" + port : "",
-                    path != null ? path : "");
-            } catch (java.net.UnknownHostException e) {
-                // If resolution fails, return original URL (may be ngrok/Ethos URL)
-                return url;
-            }
-        } catch (Exception e) {
-            return url;
-        }
     }
 
     /**
@@ -499,7 +449,7 @@ public class AeronApiHandler {
         }
 
         try {
-            String queryUrl = resolveUrlToIP(validatorUrl);
+            String queryUrl = ServerNetworkUtil.resolveUrlToIP(validatorUrl);
             java.net.URL apiUrl = new java.net.URL(queryUrl + "/v1/aeron/cluster-state");
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection) apiUrl.openConnection();
             conn.setRequestMethod("GET");

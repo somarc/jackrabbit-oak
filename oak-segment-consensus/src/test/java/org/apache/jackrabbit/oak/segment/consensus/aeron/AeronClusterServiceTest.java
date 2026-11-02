@@ -52,7 +52,6 @@ public class AeronClusterServiceTest {
         "oak.cluster.reachability.readTimeoutMs",
         "oak.cluster.reconnect.maxAttempts",
         "oak.health.peerProbeMode",
-        "aeron.delete.dirs.on.startup",
         "aeron.cluster.hostnames"
     };
 
@@ -106,7 +105,6 @@ public class AeronClusterServiceTest {
         assertEquals("8000", System.getProperty("oak.cluster.reachability.readTimeoutMs"));
         assertEquals("9", System.getProperty("oak.cluster.reconnect.maxAttempts"));
         assertEquals("http", System.getProperty("oak.health.peerProbeMode"));
-        assertEquals("true", System.getProperty("aeron.delete.dirs.on.startup"));
         assertEquals("validator-0,validator-1,validator-2", System.getProperty("aeron.cluster.hostnames"));
     }
 
@@ -164,7 +162,6 @@ public class AeronClusterServiceTest {
         when(config.reachabilityReadTimeoutMs()).thenReturn(8000);
         when(config.reconnectMaxAttempts()).thenReturn(9);
         when(config.peerProbeMode()).thenReturn("http");
-        when(config.deleteAeronDirsOnStartup()).thenReturn(true);
         return config;
     }
 

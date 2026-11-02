@@ -54,18 +54,7 @@ public class DeleteProposalHandler {
     public void handleDeleteProposal(HttpServletRequest request, HttpServletResponse response) throws IOException {
         response.setContentType("application/json");
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ADR 028: PRE-FLIGHT HEALTH CHECK
-        // Prevent silent proposal loss by rejecting requests when cluster unhealthy
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        if (context.aeronConsensusEngine == null || !context.aeronConsensusEngine.isClusterHealthy()) {
-            String reason = context.aeronConsensusEngine != null
-                ? context.aeronConsensusEngine.getUnhealthyReason()
-                : "consensus_engine_not_configured";
-            log.warn("❌ Cluster unhealthy, rejecting delete proposal: {}", reason);
-            context.apiRejectedRequests.incrementAndGet();
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
-                "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
+        if (ProposalRequestSupport.rejectIfUnhealthy(context, "delete proposal", response)) {
             return;
         }
 
@@ -194,18 +183,12 @@ public class DeleteProposalHandler {
             }
 
             String clientProposalId = request.getParameter("proposalId");
-            if (clientProposalId == null || clientProposalId.trim().isEmpty()) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the settlement contract flow.");
+            String proposalIdError = ProposalRequestSupport.proposalIdError(clientProposalId, "settlement contract");
+            if (proposalIdError != null) {
+                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST, proposalIdError);
                 return;
             }
-            String proposalId = clientProposalId.trim();
-            if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
-                ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_BAD_REQUEST,
-                    "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
-                return;
-            }
-            proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
+            String proposalId = ProposalRequestSupport.normalizeProposalId(clientProposalId.trim());
 
             // A delete signature is an EIP-191 personal_sign over exactly the contentPath.
             if (!blockchainConfig.isMockMode()

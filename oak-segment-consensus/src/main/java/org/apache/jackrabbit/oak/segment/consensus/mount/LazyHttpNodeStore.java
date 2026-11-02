@@ -63,7 +63,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
 
     @FunctionalInterface
     interface RemoteNodeStoreFactory {
-        NodeStore create(String endpoint, String mountName, long connectTimeoutMs, long readTimeoutMs) throws Exception;
+        NodeStore create(String endpoint, String mountName) throws Exception;
     }
 
     interface RefreshingNodeStore extends NodeStore {
@@ -78,8 +78,6 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
     private final String endpoint;
     private final String mountName;
     private final CircuitBreaker circuitBreaker;
-    private final long connectTimeoutMs;
-    private final long readTimeoutMs;
     private final RemoteNodeStoreFactory remoteNodeStoreFactory;
     private final long initializationRetryIntervalMs;
     private final long refreshIntervalMs;
@@ -100,42 +98,34 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
      * @param mountName Mount name for logging
      */
     public LazyHttpNodeStore(String endpoint, String mountName) {
-        this(endpoint, mountName, 5000, 30000, new CircuitBreaker(mountName), LazyHttpNodeStore::createRemoteNodeStore);
+        this(endpoint, mountName, new CircuitBreaker(mountName), LazyHttpNodeStore::createRemoteNodeStore);
     }
 
     LazyHttpNodeStore(String endpoint,
                       String mountName,
-                      long connectTimeoutMs,
-                      long readTimeoutMs,
                       CircuitBreaker circuitBreaker,
                       RemoteNodeStoreFactory remoteNodeStoreFactory) {
-        this(endpoint, mountName, connectTimeoutMs, readTimeoutMs, circuitBreaker, remoteNodeStoreFactory,
+        this(endpoint, mountName, circuitBreaker, remoteNodeStoreFactory,
             DEFAULT_INITIALIZATION_RETRY_INTERVAL_MS);
     }
 
     LazyHttpNodeStore(String endpoint,
                       String mountName,
-                      long connectTimeoutMs,
-                      long readTimeoutMs,
                       CircuitBreaker circuitBreaker,
                       RemoteNodeStoreFactory remoteNodeStoreFactory,
                       long initializationRetryIntervalMs) {
-        this(endpoint, mountName, connectTimeoutMs, readTimeoutMs, circuitBreaker, remoteNodeStoreFactory,
+        this(endpoint, mountName, circuitBreaker, remoteNodeStoreFactory,
             initializationRetryIntervalMs, DEFAULT_REFRESH_INTERVAL_MS);
     }
 
     LazyHttpNodeStore(String endpoint,
                       String mountName,
-                      long connectTimeoutMs,
-                      long readTimeoutMs,
                       CircuitBreaker circuitBreaker,
                       RemoteNodeStoreFactory remoteNodeStoreFactory,
                       long initializationRetryIntervalMs,
                       long refreshIntervalMs) {
         this.endpoint = endpoint;
         this.mountName = mountName;
-        this.connectTimeoutMs = connectTimeoutMs;
-        this.readTimeoutMs = readTimeoutMs;
         this.circuitBreaker = circuitBreaker;
         this.remoteNodeStoreFactory = remoteNodeStoreFactory;
         this.initializationRetryIntervalMs = initializationRetryIntervalMs;
@@ -184,7 +174,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
             try {
                 LOG.info("LazyHttpNodeStore[{}] initializing connection to {}...", mountName, endpoint);
 
-                store = remoteNodeStoreFactory.create(endpoint, mountName, connectTimeoutMs, readTimeoutMs);
+                store = remoteNodeStoreFactory.create(endpoint, mountName);
                 
                 delegate.set(store);
                 initialized.set(true);
@@ -465,12 +455,7 @@ public class LazyHttpNodeStore implements NodeStore, Closeable {
         );
     }
 
-    static NodeStore createRemoteNodeStore(
-            String endpoint,
-            String mountName,
-            long connectTimeoutMs,
-            long readTimeoutMs) throws Exception {
-        // Timeouts are reserved for future HTTP client wiring and retained as part of the constructor contract.
+    static NodeStore createRemoteNodeStore(String endpoint, String mountName) throws Exception {
         return new RefreshingRemoteNodeStore(endpoint, mountName);
     }
 

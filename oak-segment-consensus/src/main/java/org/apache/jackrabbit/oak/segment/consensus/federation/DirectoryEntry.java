@@ -123,10 +123,6 @@ public final class DirectoryEntry {
         return json;
     }
 
-    public boolean ownsNamespace(String namespace) {
-        return namespaces.contains(namespace);
-    }
-
     /** The namespace's own wallet and the enterprise's listed writers may write into it. */
     public boolean mayWrite(String signer, String namespace) {
         return signer.equals(namespace) || writers.contains(signer);

@@ -16,8 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import io.aeron.CommonContext;
-import org.agrona.IoUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,17 +25,13 @@ final class AeronClusterStartupPreflight {
 
     private static final Logger log = LoggerFactory.getLogger(AeronClusterStartupPreflight.class);
 
-    private final int nodeId;
     private final CrashHandler crashHandler;
 
-    AeronClusterStartupPreflight(int nodeId, CrashHandler crashHandler) {
-        this.nodeId = nodeId;
+    AeronClusterStartupPreflight(CrashHandler crashHandler) {
         this.crashHandler = crashHandler;
     }
 
     PreflightResult run(String aeronDirectoryName) {
-        cleanupAeronDirectoryIfRequested();
-
         File aeronDir = new File(aeronDirectoryName);
         boolean hasCrashMarkers = crashHandler != null && crashHandler.hasCrashed();
         boolean staleDriverDirectoryDetected = hasResidualDriverState(aeronDir);
@@ -69,42 +63,6 @@ final class AeronClusterStartupPreflight {
 
         File[] children = aeronDir.listFiles();
         return children != null && children.length > 0;
-    }
-
-    private void cleanupAeronDirectoryIfRequested() {
-        boolean deleteDirsOnStartup = Boolean.getBoolean("aeron.delete.dirs.on.startup");
-
-        if (!deleteDirsOnStartup) {
-            log.debug("Aeron directory cleanup disabled (aeron.delete.dirs.on.startup=false)");
-            return;
-        }
-
-        String aeronDirPath = System.getProperty(
-            "aeron.dir.name",
-            CommonContext.getAeronDirectoryName() + "-node-" + nodeId
-        );
-        File aeronDir = new File(aeronDirPath);
-
-        if (!aeronDir.exists()) {
-            log.debug("Aeron directory does not exist, nothing to clean: {}", aeronDir.getAbsolutePath());
-            return;
-        }
-
-        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.warn("🧹 Cleaning stale Aeron directory (aeron.delete.dirs.on.startup=true)");
-        log.warn("   Path: {}", aeronDir.getAbsolutePath());
-        log.warn("   ⚠️  This should be DISABLED in production!");
-        log.warn("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-        try {
-            IoUtil.delete(aeronDir, false);
-            log.info("✅ Aeron directory cleaned successfully");
-        } catch (Exception e) {
-            log.error("❌ Failed to clean Aeron directory - manual cleanup may be required", e);
-            log.error("   Path: {}", aeronDir.getAbsolutePath());
-            log.error("   Manual cleanup: rm -rf {}", aeronDir.getAbsolutePath());
-            throw new RuntimeException("Aeron directory cleanup failed - cannot proceed", e);
-        }
     }
 
     static final class PreflightResult {

@@ -22,7 +22,6 @@ import org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTr
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
 import org.apache.jackrabbit.oak.segment.consensus.evm.RpcDomainAttestor;
-import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -42,21 +41,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Event-driven EVM bridge for chain-backed modes.
- * 
- * <p>This bridge listens to WriteAuthorized events from OakWriteAuthorizationV5 contract
- * through Web3j event subscriptions.
- * 
- * <p>Event Structure (from OakWriteAuthorizationV5.sol):
- * <pre>
- * event WriteAuthorized(
- *     bytes32 indexed proposalId,
- *     address indexed payer,
- *     bytes32 indexed shardHash,
- *     uint96 amount,
- *     uint32 blockNumber
- * );
- * </pre>
+ * Event-driven EVM bridge for chain-backed modes: subscribes through Web3j to the configured payment contract's
+ * {@code ProposalSettledV5} (ValidatorPaymentV5) and {@code ProposalPaid} (ValidatorPaymentV3.2) events and keeps
+ * one {@link PaymentProof} per proposal.
  */
 public class EventDrivenEvmBridge implements EvmBridge {
     
@@ -93,16 +80,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
     }
     
     /**
-     * Create event-driven EVM bridge.
-     * 
-     * @param networkName Network name (e.g., "mainnet", "polygon", "sepolia")
-     * @param contractAddress Contract address (0x...)
-     */
-    public EventDrivenEvmBridge(@NotNull String networkName, @NotNull String contractAddress) {
-        this(networkName, contractAddress, null);
-    }
-
-    /**
      * Create event-driven EVM bridge whose RPC domain is attested at start.
      *
      * @param networkName blockchain mode key ("local", "sepolia", ...); fixes the expected chain id
@@ -136,14 +113,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
                          @NotNull String contractAddress,
                          @NotNull OakPaymentEventParser paymentEventParser,
                          @NotNull Web3jFactory web3jFactory,
-                         @NotNull ReconnectScheduler reconnectScheduler) {
-        this(networkName, contractAddress, paymentEventParser, web3jFactory, reconnectScheduler, null);
-    }
-
-    EventDrivenEvmBridge(@NotNull String networkName,
-                         @NotNull String contractAddress,
-                         @NotNull OakPaymentEventParser paymentEventParser,
-                         @NotNull Web3jFactory web3jFactory,
                          @NotNull ReconnectScheduler reconnectScheduler,
                          @Nullable String expectedCodeHash) {
         this.networkName = networkName;
@@ -169,19 +138,12 @@ public class EventDrivenEvmBridge implements EvmBridge {
 
     @Override
     @Nullable
-    public SettlementDetails getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
+    public PaymentProof getSettlementDetailsByTransactionHash(@NotNull String transactionHash) {
         PaymentProof cached = findCachedProofByTransactionHash(transactionHash);
         if (cached != null) {
-            PaymentProof refreshed = refreshProofConfirmations(cached);
-            return SettlementDetails.fromProof(getNetworkName(), refreshed);
+            return refreshProofConfirmations(cached);
         }
-
-        PaymentProof proof = fetchPaymentByTransactionHash(transactionHash);
-        return proof != null ? SettlementDetails.fromProof(getNetworkName(), proof) : null;
-    }
-    
-    public long getCurrentBlockNumber() {
-        return currentBlock;
+        return fetchPaymentByTransactionHash(transactionHash);
     }
     
     @Override
@@ -452,19 +414,7 @@ public class EventDrivenEvmBridge implements EvmBridge {
         if (confirmations == proof.getConfirmations()) {
             return proof;
         }
-        PaymentProof refreshed = new SimplePaymentProof(
-            proof.getTransactionHash(),
-            proof.getBlockNumber(),
-            proof.getFromAddress(),
-            proof.getContractAddress(),
-            proof.getProposalId(),
-            proof.getAmountWei(),
-            proof.getPaymentTier(),
-            proof.getProposalKind(),
-            proof.getPaymentToken(),
-            proof.getCapabilityFlags(),
-            confirmations
-        );
+        PaymentProof refreshed = proof.withConfirmations(confirmations);
         payments.put(proof.getProposalId(), refreshed);
         return refreshed;
     }
@@ -537,14 +487,13 @@ public class EventDrivenEvmBridge implements EvmBridge {
     // ========== Event Processing ==========
     
     /**
-     * Process a WriteAuthorized event from the Web3j subscription or a log lookup.
+     * Process a payment event from the Web3j subscription or a log lookup.
      */
     void processWriteAuthorizedEvent(WriteAuthorizedEvent event) {
-        log.info("📨 Processing WriteAuthorized event: proposalId={}, payer={}, amount={}, block={}", 
+        log.info("📨 Processing payment event: proposalId={}, payer={}, amount={}, block={}",
             event.proposalId, event.payer, event.amount, event.blockNumber);
         
-        // Create payment proof
-        PaymentProof proof = new SimplePaymentProof(
+        PaymentProof proof = new PaymentProof(
             event.txHash,
             event.blockNumber,
             event.payer,
@@ -568,12 +517,11 @@ public class EventDrivenEvmBridge implements EvmBridge {
     }
     
     /**
-     * WriteAuthorized event structure (matches Solidity event).
+     * A decoded payment event ({@code ProposalSettledV5} or {@code ProposalPaid}).
      */
     public static class WriteAuthorizedEvent {
         public final String proposalId;
         public final String payer;
-        public final String shardHash;
         public final BigInteger amount;
         public final long blockNumber;
         public final String txHash;
@@ -587,22 +535,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
         public WriteAuthorizedEvent(
                 String proposalId,
                 String payer,
-                String shardHash,
-                BigInteger amount,
-                long blockNumber,
-                String txHash,
-                ValidatorEarningsTracker.PaymentTier paymentTier,
-                PaymentProof.ProposalKind proposalKind,
-                PaymentProof.PaymentToken paymentToken,
-                int capabilityFlags) {
-            this(proposalId, payer, shardHash, amount, blockNumber, txHash, paymentTier, proposalKind, paymentToken,
-                capabilityFlags, null);
-        }
-
-        public WriteAuthorizedEvent(
-                String proposalId,
-                String payer,
-                String shardHash,
                 BigInteger amount,
                 long blockNumber,
                 String txHash,
@@ -613,7 +545,6 @@ public class EventDrivenEvmBridge implements EvmBridge {
                 String emitterAddress) {
             this.proposalId = proposalId;
             this.payer = payer;
-            this.shardHash = shardHash;
             this.amount = amount;
             this.blockNumber = blockNumber;
             this.txHash = txHash;

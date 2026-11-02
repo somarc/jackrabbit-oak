@@ -29,20 +29,14 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
- * Handler for explorer API endpoints (/api/explore, /api/segments/recent, /api/segments/tars).
+ * Handler for explorer API endpoints (/api/explore, /api/blob/{blobId}).
  * 
  * <p>Extracted from SegmentHttpServer to separate API exploration concerns.</p>
  */
@@ -61,27 +55,17 @@ public class ExplorerApiHandler {
     public static final String BLOB_SIGNED = "oak.blob.signed";
     
     private final Supplier<NodeStore> nodeStoreSupplier;
-    private final Path storeDirectory;
     private final Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier;
     
-    public ExplorerApiHandler(NodeStore nodeStore, Path storeDirectory, org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
-        this(() -> nodeStore, storeDirectory, () -> blobStore);
+    public ExplorerApiHandler(NodeStore nodeStore, org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore) {
+        this(() -> nodeStore, () -> blobStore);
     }
 
     private ExplorerApiHandler(
             Supplier<NodeStore> nodeStoreSupplier,
-            Path storeDirectory,
             Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
         this.nodeStoreSupplier = nodeStoreSupplier;
-        this.storeDirectory = storeDirectory;
         this.blobStoreSupplier = blobStoreSupplier;
-    }
-
-    public static ExplorerApiHandler withBlobStoreSupplier(
-            NodeStore nodeStore,
-            Path storeDirectory,
-            Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
-        return new ExplorerApiHandler(() -> nodeStore, storeDirectory, blobStoreSupplier);
     }
 
     /**
@@ -90,9 +74,8 @@ public class ExplorerApiHandler {
      */
     public static ExplorerApiHandler withSuppliers(
             Supplier<NodeStore> nodeStoreSupplier,
-            Path storeDirectory,
             Supplier<org.apache.jackrabbit.oak.spi.blob.BlobStore> blobStoreSupplier) {
-        return new ExplorerApiHandler(nodeStoreSupplier, storeDirectory, blobStoreSupplier);
+        return new ExplorerApiHandler(nodeStoreSupplier, blobStoreSupplier);
     }
     
     /**
@@ -163,14 +146,6 @@ public class ExplorerApiHandler {
                             } catch (Exception blobEx) {
                                 value = "[Binary: " + binarySize + " bytes]";
                             }
-                        } else if (prop.getType() == Type.BOOLEAN) {
-                            value = String.valueOf(prop.getValue(Type.BOOLEAN));
-                        } else if (prop.getType() == Type.LONG) {
-                            value = String.valueOf(prop.getValue(Type.LONG));
-                        } else if (prop.getType() == Type.DOUBLE) {
-                            value = String.valueOf(prop.getValue(Type.DOUBLE));
-                        } else if (prop.getType() == Type.DATE) {
-                            value = String.valueOf(prop.getValue(Type.DATE));
                         } else {
                             value = prop.getValue(Type.STRING);
                         }
@@ -191,98 +166,6 @@ public class ExplorerApiHandler {
         }
     }
     
-    /**
-     * Handle GET /api/segments/recent - Recent segment writes from journal (JSON).
-     */
-    public void handleRecentSegments(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-        
-        try {
-            List<Map<String, Object>> segments = new ArrayList<>();
-            Path journalPath = storeDirectory.resolve("journal.log");
-            
-            if (Files.exists(journalPath)) {
-                List<String> lines = Files.readAllLines(journalPath);
-                int start = Math.max(0, lines.size() - 20);
-                for (int i = lines.size() - 1; i >= start; i--) {
-                    String line = lines.get(i);
-                    if (line.contains(" ")) {
-                        String[] parts = line.split(" ", 2);
-                        Map<String, Object> segment = new LinkedHashMap<>();
-                        segment.put("id", parts[0]);
-                        segment.put("timestamp", parts.length > 1 ? parts[1] : "");
-                        segments.add(segment);
-                    }
-                }
-            }
-            
-            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, segments);
-            
-        } catch (Exception e) {
-            log.error("Error reading recent segments", e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.getWriter().write("[]");
-        }
-    }
-    
-    /**
-     * Handle GET /api/segments/tars - List all TAR files and storage blocks (JSON).
-     */
-    public void handleTarFiles(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-        
-        try {
-            List<Map<String, Object>> tarEntries = new ArrayList<>();
-            addTarEntries(storeDirectory, tarEntries);
-            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, tarEntries);
-            
-        } catch (Exception e) {
-            log.error("Error reading TAR files", e);
-            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            response.getWriter().write("[]");
-        }
-    }
-    
-    /**
-     * Appends one entry per {@code .tar} file in {@code storeDirectory}, sorted by name, with a segment
-     * count estimated from the journal length in proportion to file size. Entries added before a failure stay.
-     */
-    static void addTarEntries(Path storeDirectory, List<Map<String, Object>> target) throws IOException {
-        int totalSegments = 0;
-        Path journalPath = storeDirectory.resolve("journal.log");
-        if (Files.exists(journalPath)) {
-            totalSegments = Files.readAllLines(journalPath).size();
-        }
-
-        List<Path> tarFiles;
-        long totalSize = 0;
-        try (Stream<Path> paths = Files.list(storeDirectory)) {
-            tarFiles = paths
-                .filter(p -> p.toString().endsWith(".tar"))
-                .sorted(Comparator.comparing(Path::toString))
-                .collect(Collectors.toList());
-            for (Path tarFile : tarFiles) {
-                totalSize += Files.size(tarFile);
-            }
-        }
-
-        for (Path tarFile : tarFiles) {
-            long fileSize = Files.size(tarFile);
-            BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
-            int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
-
-            Map<String, Object> entry = new LinkedHashMap<>();
-            entry.put("name", tarFile.getFileName().toString());
-            entry.put("size", fileSize);
-            entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
-            entry.put("segmentCount", estimatedSegments);
-            entry.put("estimatedCount", true);
-            entry.put("created", attrs.creationTime().toString());
-            entry.put("modified", attrs.lastModifiedTime().toString());
-            target.add(entry);
-        }
-    }
-
     /**
      * Handle GET /api/blob/{blobId} - Stream binary from Oak BlobStore.
      * 

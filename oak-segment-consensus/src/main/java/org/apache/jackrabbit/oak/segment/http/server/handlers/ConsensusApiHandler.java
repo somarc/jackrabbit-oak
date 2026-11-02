@@ -183,31 +183,9 @@ public class ConsensusApiHandler implements AutoCloseable {
     }
     
     /**
-     * ✈️ AERON NATIVE: Apply replicated write to FileStore.
-     * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the write.
-     * 
-     * <p>Delegates to {@link WriteApplicationService} for the actual write application.
-     * 
-     * @param ipfsCid IPFS CID from client-side upload (ADR 016), may be null
+     * Applies a replicated write; called from AeronConsensusEngine after Aeron replicates it.
+     * Delegates to {@link WriteApplicationService}.
      */
-    public void applyReplicatedWrite(String walletAddress, String path, String contentType,
-                                     String message, String signature, String intentToken,
-                                     String blobId, String mimeType, String ipfsCid,
-                                     String proposalId) {
-        applyReplicatedWriteWithAuditMetadata(
-            walletAddress,
-            path,
-            contentType,
-            message,
-            signature,
-            intentToken,
-            blobId,
-            mimeType,
-            ipfsCid,
-            MutationAuditMetadata.write(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public void applyReplicatedWriteWithAuditMetadata(String walletAddress, String path, String contentType,
                                                       String message, String signature, String intentToken,
                                                       String blobId, String mimeType, String ipfsCid,
@@ -219,32 +197,11 @@ public class ConsensusApiHandler implements AutoCloseable {
     }
     
     /**
-     * ✈️ AERON NATIVE: Apply replicated delete to FileStore.
-     * This is called from AeronConsensusEngine.onSessionMessage() after Aeron replicates the delete.
-     * 
-     * <p>Delegates to {@link DeleteApplicationService} for the actual delete application.
-     * 
-     * Delete in Oak = Remove node from tree (writes new segment saying "path no longer exists")
-     * Old segments remain until GC/compaction runs
+     * Applies a replicated delete; called from AeronConsensusEngine after Aeron replicates it.
+     * Delegates to {@link DeleteApplicationService}.
      */
-    public void applyReplicatedDelete(String walletAddress, String path, String signature, String proposalId) {
-        applyReplicatedDeleteWithAuditMetadata(
-            walletAddress,
-            path,
-            signature,
-            MutationAuditMetadata.delete(null, null, proposalId, null, null, null, null)
-        );
-    }
-
     public void applyReplicatedDeleteWithAuditMetadata(String walletAddress, String path, String signature,
                                                        MutationAuditMetadata auditMetadata) {
         deleteApplicationService.applyDeleteWithAuditMetadata(walletAddress, path, signature, auditMetadata);
     }
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // DEAD CODE REMOVED - January 2026 (tech debt cleanup)
-    // - discoverLeaderFromPeerClusterState() - Use LeaderDiscoveryService instead
-    // - resolveUrlToIP() - Only used by discoverLeaderFromPeerClusterState
-    // - getNextValidatorInRotation() - Never called
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 }

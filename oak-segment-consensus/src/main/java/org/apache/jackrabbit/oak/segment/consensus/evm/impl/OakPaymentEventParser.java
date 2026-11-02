@@ -27,27 +27,16 @@ import org.web3j.abi.datatypes.Event;
 import org.web3j.abi.datatypes.generated.Bytes32;
 import org.web3j.abi.datatypes.generated.Uint32;
 import org.web3j.abi.datatypes.generated.Uint256;
-import org.web3j.abi.datatypes.generated.Uint96;
 import org.web3j.abi.datatypes.generated.Uint8;
 import org.web3j.protocol.core.methods.request.EthFilter;
 import org.web3j.protocol.core.methods.response.Log;
 import org.web3j.utils.Numeric;
 
-import java.math.BigInteger;
 import java.util.Arrays;
 
 final class OakPaymentEventParser {
 
     private static final Logger log = LoggerFactory.getLogger(OakPaymentEventParser.class);
-
-    private static final Event WRITE_AUTHORIZED_EVENT = new Event("WriteAuthorized",
-        Arrays.asList(
-            new TypeReference<Bytes32>(true) {},
-            new TypeReference<Address>(true) {},
-            new TypeReference<Bytes32>(true) {},
-            new TypeReference<Uint96>() {},
-            new TypeReference<Uint32>() {}
-        ));
 
     private static final Event PROPOSAL_PAID_EVENT = new Event("ProposalPaid",
         Arrays.asList(
@@ -56,19 +45,6 @@ final class OakPaymentEventParser {
             new TypeReference<Uint256>() {},
             new TypeReference<Uint8>() {},
             new TypeReference<Uint8>(true) {},
-            new TypeReference<Address>() {},
-            new TypeReference<Uint256>() {}
-        ));
-
-    private static final Event PROPOSAL_SETTLED_EVENT = new Event("ProposalSettled",
-        Arrays.asList(
-            new TypeReference<Bytes32>(true) {},
-            new TypeReference<Address>(true) {},
-            new TypeReference<Uint8>() {},
-            new TypeReference<Uint8>() {},
-            new TypeReference<Uint256>() {},
-            new TypeReference<Uint8>(true) {},
-            new TypeReference<Uint32>() {},
             new TypeReference<Address>() {},
             new TypeReference<Uint256>() {}
         ));
@@ -84,9 +60,7 @@ final class OakPaymentEventParser {
 
     void addSupportedEventTopics(EthFilter filter) {
         filter.addOptionalTopics(
-            EventEncoder.encode(WRITE_AUTHORIZED_EVENT),
             EventEncoder.encode(PROPOSAL_PAID_EVENT),
-            EventEncoder.encode(PROPOSAL_SETTLED_EVENT),
             EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT)
         );
     }
@@ -113,52 +87,13 @@ final class OakPaymentEventParser {
             return null;
         }
         String signature = ethLog.getTopics().get(0);
-        if (EventEncoder.encode(WRITE_AUTHORIZED_EVENT).equalsIgnoreCase(signature)) {
-            return parseWriteAuthorizedLog(ethLog, currentBlock);
-        }
         if (EventEncoder.encode(PROPOSAL_PAID_EVENT).equalsIgnoreCase(signature)) {
             return parseProposalPaidLog(ethLog, currentBlock);
-        }
-        if (EventEncoder.encode(PROPOSAL_SETTLED_EVENT).equalsIgnoreCase(signature)) {
-            return parseProposalSettledLog(ethLog, currentBlock);
         }
         if (EventEncoder.encode(PROPOSAL_SETTLED_V5_EVENT).equalsIgnoreCase(signature)) {
             return parseProposalSettledV5Log(ethLog, currentBlock);
         }
         return null;
-    }
-
-    /**
-     * The event's own {@code uint32 blockNumber} data word is caller-controlled contract data; the block that
-     * includes the log is taken from the log itself.
-     */
-    private EventDrivenEvmBridge.WriteAuthorizedEvent parseWriteAuthorizedLog(Log ethLog, long currentBlock) {
-        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 4) {
-            return null;
-        }
-        String proposalId = ethLog.getTopics().get(1);
-        String payer = "0x" + ethLog.getTopics().get(2).substring(26);
-        String shardHash = ethLog.getTopics().get(3);
-
-        String data = ethLog.getData();
-        if (data == null || data.length() < 130) {
-            return null;
-        }
-        BigInteger amount = Numeric.toBigInt(data.substring(0, 66));
-
-        return new EventDrivenEvmBridge.WriteAuthorizedEvent(
-            proposalId,
-            payer,
-            shardHash,
-            amount,
-            logBlockNumber(ethLog, currentBlock),
-            ethLog.getTransactionHash(),
-            null,
-            PaymentProof.ProposalKind.WRITE,
-            PaymentProof.PaymentToken.UNKNOWN,
-            0,
-            ethLog.getAddress()
-        );
     }
 
     private EventDrivenEvmBridge.WriteAuthorizedEvent parseProposalPaidLog(Log ethLog, long currentBlock) {
@@ -173,7 +108,6 @@ final class OakPaymentEventParser {
         return new EventDrivenEvmBridge.WriteAuthorizedEvent(
             ethLog.getTopics().get(1),
             "0x" + ethLog.getTopics().get(2).substring(26),
-            "0x0",
             Numeric.toBigInt(data.substring(0, 66)),
             logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
@@ -181,35 +115,6 @@ final class OakPaymentEventParser {
             PaymentProof.ProposalKind.WRITE,
             decodePaymentToken(ethLog.getTopics().size() > 3 ? ethLog.getTopics().get(3) : null),
             0,
-            ethLog.getAddress()
-        );
-    }
-
-    private EventDrivenEvmBridge.WriteAuthorizedEvent parseProposalSettledLog(Log ethLog, long currentBlock) {
-        if (ethLog.getTopics() == null || ethLog.getTopics().size() < 4) {
-            return null;
-        }
-        String data = ethLog.getData();
-        if (data == null || data.length() < 386) {
-            return null;
-        }
-
-        PaymentProof.ProposalKind proposalKind = decodeProposalKind(dataWord(data, 0));
-        if (proposalKind == null) {
-            return null;
-        }
-
-        return new EventDrivenEvmBridge.WriteAuthorizedEvent(
-            ethLog.getTopics().get(1),
-            "0x" + ethLog.getTopics().get(2).substring(26),
-            "0x0",
-            Numeric.toBigInt(dataWord(data, 2)),
-            logBlockNumber(ethLog, currentBlock),
-            ethLog.getTransactionHash(),
-            decodePaymentTier(dataWord(data, 1)),
-            proposalKind,
-            decodePaymentToken(ethLog.getTopics().get(3)),
-            Numeric.toBigInt(dataWord(data, 3)).intValue(),
             ethLog.getAddress()
         );
     }
@@ -231,7 +136,6 @@ final class OakPaymentEventParser {
         return new EventDrivenEvmBridge.WriteAuthorizedEvent(
             ethLog.getTopics().get(1),
             "0x" + ethLog.getTopics().get(2).substring(26),
-            "0x0",
             Numeric.toBigInt(dataWord(data, 1)),
             logBlockNumber(ethLog, currentBlock),
             ethLog.getTransactionHash(),
@@ -243,6 +147,7 @@ final class OakPaymentEventParser {
         );
     }
 
+    /** The including block comes from the log itself, never from the event's caller-controlled data words. */
     private static long logBlockNumber(Log ethLog, long currentBlock) {
         return ethLog.getBlockNumber() != null ? ethLog.getBlockNumber().longValue() : currentBlock;
     }
@@ -267,7 +172,7 @@ final class OakPaymentEventParser {
             case 1:
                 return PaymentProof.ProposalKind.DELETE;
             default:
-                log.warn("Unknown proposal kind code in ProposalSettled event: {}", code);
+                log.warn("Unknown proposal kind code in ProposalSettledV5 event: {}", code);
                 return null;
         }
     }

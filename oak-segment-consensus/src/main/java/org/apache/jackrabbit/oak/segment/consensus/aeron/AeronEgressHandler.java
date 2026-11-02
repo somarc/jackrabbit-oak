@@ -20,14 +20,12 @@ import io.aeron.Publication;
 import io.aeron.cluster.client.AeronCluster;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.IdleStrategy;
-import org.osgi.service.component.annotations.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Handles Aeron egress (outbound) message delivery with back-pressure retry logic.
  */
-@Component(service = AeronEgressHandler.class)
 public class AeronEgressHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronEgressHandler.class);
@@ -45,14 +43,7 @@ public class AeronEgressHandler {
                                             DirectBuffer messageBuffer,
                                             int totalLength,
                                             String label,
-                                            int maxRetries,
-                                            Runnable onSuccess,
-                                            boolean logSuccess) {
-        if (client == null) {
-            log.error("❌ AeronCluster client not available - cannot send {}", label);
-            return OfferResult.FAILED;
-        }
-
+                                            int maxRetries) {
         idleStrategy.reset();
         long result;
         int retries = 0;
@@ -80,14 +71,6 @@ public class AeronEgressHandler {
                 log.error("❌ Failed to send {} through ingress: {}", label, result);
                 return OfferResult.FAILED;
             }
-        }
-
-        if (onSuccess != null) {
-            onSuccess.run();
-        }
-
-        if (logSuccess) {
-            log.info("✅ {} sent through AeronCluster.offer() - will replicate to all nodes via Raft", label);
         }
 
         return OfferResult.SENT;

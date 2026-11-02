@@ -257,7 +257,7 @@ final class AeronInternalIngressClientManager implements AutoCloseable {
             return SendResult.CLOSED;
         }
         AeronEgressHandler.OfferResult result = egressHandler.offerWithRetryResult(
-            client, idleStrategySupplier.get(), buffer, length, label, OFFER_MAX_RETRIES, null, false);
+            client, idleStrategySupplier.get(), buffer, length, label, OFFER_MAX_RETRIES);
         switch (result) {
             case SENT:
                 return SendResult.SENT;

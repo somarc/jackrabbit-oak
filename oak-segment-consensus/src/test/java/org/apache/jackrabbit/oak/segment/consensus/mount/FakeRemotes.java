@@ -103,8 +103,8 @@ final class FakeRemotes {
     }
 
     FederatedMountStore.EndpointStoreFactory endpoints() {
-        return (url, mountName, breaker) -> new LazyHttpNodeStore(url, mountName, 1L, 1L, breaker,
-            (endpoint, name, connectTimeoutMs, readTimeoutMs) -> {
+        return (url, mountName, breaker) -> new LazyHttpNodeStore(url, mountName, breaker,
+            (endpoint, name) -> {
                 connects.computeIfAbsent(endpoint, u -> new AtomicInteger()).incrementAndGet();
                 Remote remote = remotes.get(endpoint);
                 if (remote == null || remote.down) {
