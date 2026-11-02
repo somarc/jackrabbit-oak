@@ -38,6 +38,12 @@ flowchart LR
   `COMMITTED` only after a majority of validators have applied it and flushed it
   to disk. Each accepted write is designed to end as `COMMITTED`, `FAILED` or
   `TIMED_OUT`, never silently.
+- **One effect per proposal ID.** Each applied write or delete records its
+  `proposalId` in a hidden, replicated index (`/:consensus/proposals`) in the
+  same Oak commit as its change. A resend with the same `proposalId`, whatever
+  path, content type or organization it carries, changes nothing: the leader
+  answers `409` `duplicate_proposal` with the stored path, and replicated apply
+  ignores any resend that reaches the log anyway.
 - **Genesis is verified.** The first replicated command creates a reserved,
   digest-sealed genesis subtree, and writes are refused until every member has
   verified it.
@@ -237,8 +243,8 @@ See the repository [security policy](../SECURITY.md).
 | `GET /v1/index` | Live list of every route this validator serves. |
 | `GET /health`, `/health/local`, `/health/cluster`, `/health/deep` | Liveness and cluster health observations. |
 | `GET /v1/consensus/status`, `/v1/consensus/leader`, `/v1/aeron/cluster-state` | Role, leader and Aeron cluster state. |
-| `POST /v1/propose-write`, `/v1/propose-delete` | Submit signed operations; returns `202` or a `307` redirect to the leader. |
-| `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`. |
+| `POST /v1/propose-write`, `/v1/propose-delete` | Submit signed operations; returns `202`, a `307` redirect to the leader, or `409` `duplicate_proposal` for a `proposalId` already applied or in flight. |
+| `GET /v1/ops/operations/{id}` | Operation state through to `COMMITTED`, `FAILED` or `TIMED_OUT`; an applied proposal is reported `COMMITTED` from replicated state by any validator. |
 | `GET /v1/wallets/content?wallet=…`, `/v1/explorer/*` | Read and browse repository content. |
 | `GET /api/blob/{blobId}`, `/v1/binary/download-url/{blobId}` | Download a binary (plaintext, also when IPFS encryption is on), and issue a signed, expiring URL for it. |
 | `GET /v1/ops/ipfs/health`, `/v1/ops/ipfs/verify?limit=` | IPFS node and cluster status, encryption and network settings, operation counts; and a check that stored binaries are pinned or replicated. `/health/deep` carries the status only, and `/metrics` the `oak_ipfs_*_total` counters. |
@@ -453,9 +459,11 @@ evidence and its limits.
 
 **Not yet validated:** crash and restart recovery, quorum loss and partitions,
 chain-backed payments and signed-intent binding, cloud storage backends, independent
-IPFS replication, dynamic membership, cross-cluster deployments, cluster-wide
-proposal idempotency, and garbage collection. Operation status records live only on
-the validator that accepted the write.
+IPFS replication, dynamic membership, cross-cluster deployments, and garbage
+collection. Cluster-wide proposal idempotency (one effect per `proposalId`) is
+implemented and unit-tested but not yet validated on a live cluster. Status records
+for proposals still in flight live only on the validator that accepted them;
+applied proposals are answered from replicated state.
 
 Each kind of evidence stands on its own: unit tests, bounded multi-validator
 convergence, fault and recovery runs, and chain-backed or production evidence. A

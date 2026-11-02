@@ -126,6 +126,18 @@ an entry that failed on a member is above its watermark and is applied again aft
 restart. Startup refuses an Aeron log or snapshot that does not belong to the store.
 The watermark is outside the zero-wallet subtree and is not part of the genesis digest.
 
+The same merge records the client `proposalId` of each applied write or delete under
+`:consensus/proposals/<id[2..4]>/<id[4..6]>/<id>` (`kind`, `path`, `appliedAt` from the
+log timestamp). Apply checks this index in log order: a proposal id that is already
+there mutates nothing and is acknowledged as a duplicate, so one paid proposal has one
+effect on every member. A delete whose target is absent still records its id. Entries
+are never removed. The index travels with the store like any other node and is
+rebuilt identically by replay; stores and logs written before it load unchanged, and
+their resends at the same path are still caught by the existing `oak:proposalId`
+check. History applied by an older build has no index entries, so replaying it from
+an empty store with this build would apply a different-path resend once instead of
+twice; members whose watermark already covers that history are unaffected.
+
 ## Durability acknowledgement
 
 `202 Accepted` means queue admission only. Poll
@@ -133,8 +145,9 @@ The watermark is outside the zero-wallet subtree and is not part of the genesis 
 `sourceState=PROCESSED` plus `durabilityState=ACKED`.
 
 Every local durability vote must follow a successful FileStore flush covering that
-application. A repeated write, an already absent delete target, or an existing
-`oak:proposalId` does not prove disk persistence: those paths request a flush too.
+application. A repeated write, an already absent delete target, a proposal id already
+in the applied-proposal index, or an existing `oak:proposalId` does not prove disk
+persistence: those paths request a flush too.
 Flush callbacks are assigned to a captured cohort. Work registered while a flush is
 in progress waits for a subsequent flush. Failed flushes retain callbacks for retry
 and emit no durability-success vote. Callback HEADs are captured before the flush,
