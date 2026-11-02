@@ -34,14 +34,14 @@ import java.util.function.BooleanSupplier;
  * replay on restart: the archive log is never purged, because snapshots are local to each member and a member
  * with an empty store must still replay the full log (purging would need Oak state transfer).
  */
-final class SnapshotTrigger {
+public final class SnapshotTrigger {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotTrigger.class);
 
     static final String INTERVAL_MS_PROPERTY = "oak.aeron.snapshot.intervalMs";
     static final String ENTRY_INTERVAL_PROPERTY = "oak.aeron.snapshot.entryInterval";
-    static final long DEFAULT_INTERVAL_MS = TimeUnit.MINUTES.toMillis(10);
-    static final long DEFAULT_ENTRY_INTERVAL = 10_000L;
+    public static final long DEFAULT_INTERVAL_MS = TimeUnit.MINUTES.toMillis(10);
+    public static final long DEFAULT_ENTRY_INTERVAL = 10_000L;
 
     private final long intervalMs;
     private final long entryInterval;

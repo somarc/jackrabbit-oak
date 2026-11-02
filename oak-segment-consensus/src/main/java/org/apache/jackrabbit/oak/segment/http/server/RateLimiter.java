@@ -71,10 +71,10 @@ public class RateLimiter {
     public static final String PROP_WRITE_RPS = "rate.limit.write.rps";
     
     // Default values
-    static final int DEFAULT_REQUESTS_PER_SECOND = 100;
-    static final int DEFAULT_BURST_SIZE = 200;
-    static final int DEFAULT_GLOBAL_RPS = 1000;
-    static final int DEFAULT_WRITE_RPS = 10;
+    public static final int DEFAULT_REQUESTS_PER_SECOND = 100;
+    public static final int DEFAULT_BURST_SIZE = 200;
+    public static final int DEFAULT_GLOBAL_RPS = 1000;
+    public static final int DEFAULT_WRITE_RPS = 10;
     private static final long WARN_LOG_INTERVAL_MS = 30_000L;
     private static final int WARN_LOG_SAMPLE_SIZE = 250;
     

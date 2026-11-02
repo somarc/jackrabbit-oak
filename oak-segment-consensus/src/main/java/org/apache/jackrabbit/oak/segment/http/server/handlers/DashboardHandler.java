@@ -168,7 +168,7 @@ public class DashboardHandler {
         entry(endpoints, "source", "GET", "/v1/explorer/content/clusters/{clusterId}/provenance", "CRX/OC cluster-scoped provenance and authority facts", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/provenance");
         entry(endpoints, "local-ui", "GET", "/explorer", "Validator-local CRX/OC read-only content explorer", "CRX/OC", null, LOCAL_UI_REPLACEMENT);
         entry(endpoints, "local-diagnostic", "GET", "/api/explore?path=/", "Legacy CRX/OC local node tree browse API", "CRX/OC", null, "/ops/v1/explorer/content/*");
-        entry(endpoints, "local-diagnostic", "GET", "/v1/gc/status", "Segment and binary GC state", "Storage", null, null);
+        entry(endpoints, "source", "GET", "/v1/gc/status", "Segment and binary GC state", "Storage", "gc.status.v2", "/ops/v1/gc/status");
         entry(endpoints, "local-diagnostic", "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Storage", null, null);
         entry(endpoints, "local-diagnostic", "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Storage", null, null);
         entry(endpoints, "local-diagnostic", "GET", "/api/cid/stats", "CID mapping stats", "Storage", null, null);

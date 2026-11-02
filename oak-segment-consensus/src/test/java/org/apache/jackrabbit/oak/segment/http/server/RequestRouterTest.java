@@ -1391,7 +1391,7 @@ public class RequestRouterTest {
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
             String json = body.toString();
-            assertTrue(json, json.startsWith("{\"segment\":{\"enabled\":true,\"retainedGenerations\":2,"));
+            assertTrue(json, json.startsWith("{\"contractVersion\":\"gc.status.v2\",\"segment\":{\"enabled\":true,\"retainedGenerations\":2,"));
             assertTrue(json, json.contains("\"tailIntervalMs\":86400000,\"fullIntervalMs\":604800000"));
             assertTrue(json, json.contains("\"forceTimeoutSeconds\":0"));
             assertTrue(json, json.contains("\"readerWindowMs\":86400000"));
@@ -1413,7 +1413,7 @@ public class RequestRouterTest {
             router.route(request("GET", "/v1/gc/status"), response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertEquals("{\"segment\":null,\"binary\":{\"enabled\":false}}", body.toString());
+            assertEquals("{\"contractVersion\":\"gc.status.v2\",\"segment\":null,\"binary\":{\"enabled\":false}}", body.toString());
         });
     }
 

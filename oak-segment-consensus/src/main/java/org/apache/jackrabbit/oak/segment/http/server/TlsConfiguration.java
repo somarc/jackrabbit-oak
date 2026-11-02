@@ -77,9 +77,9 @@ public class TlsConfiguration {
     public static final String PROP_CIPHERS = "tls.ciphers";
     
     // Default values
-    private static final String DEFAULT_KEYSTORE_TYPE = "PKCS12";
-    private static final String DEFAULT_PROTOCOLS = "TLSv1.2,TLSv1.3";
-    private static final String DEFAULT_CLIENT_AUTH = "none";
+    public static final String DEFAULT_KEYSTORE_TYPE = "PKCS12";
+    public static final String DEFAULT_PROTOCOLS = "TLSv1.2,TLSv1.3";
+    public static final String DEFAULT_CLIENT_AUTH = "none";
     
     // Recommended cipher suites for TLS 1.2/1.3
     private static final String[] RECOMMENDED_CIPHERS = {
