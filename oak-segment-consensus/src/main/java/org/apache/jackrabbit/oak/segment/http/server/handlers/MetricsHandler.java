@@ -245,7 +245,7 @@ public class MetricsHandler {
         // Update Aeron metrics (system counters and stream counters)
         if (context != null && context.aeronPrometheusMetrics != null) {
             try {
-                context.aeronPrometheusMetrics.updateGaugeValues();
+                context.aeronPrometheusMetrics.updateMetrics();
             } catch (Exception e) {
                 log.debug("Failed to update Aeron Prometheus metrics: {}", e.getMessage());
             }

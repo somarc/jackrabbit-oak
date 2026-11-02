@@ -537,8 +537,6 @@ public class HealthHandler {
             payload.put("healthStatus", healthMonitor.getHealthStatus());
             payload.put("errorCount", healthMonitor.getErrorCount());
             payload.put("timeoutCount", healthMonitor.getTimeoutCount());
-            payload.put("backpressureCount", healthMonitor.getBackpressureCount());
-            payload.put("freeSpaceMB", healthMonitor.getFreeSpaceMB());
         } else {
             payload.put("status", "UP");
             payload.put("healthMonitor", "not_initialized");

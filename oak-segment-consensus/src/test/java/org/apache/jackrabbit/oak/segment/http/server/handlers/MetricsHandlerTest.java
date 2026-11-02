@@ -181,7 +181,7 @@ public class MetricsHandlerTest {
 
             verify(response).setContentType(TextFormat.CONTENT_TYPE_004);
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            verify(prometheusMetrics).updateGaugeValues();
+            verify(prometheusMetrics).updateMetrics();
 
             String metrics = body.toString();
             assertTrue(metrics.contains("oak_consensus_is_leader 1.0"));
@@ -212,7 +212,7 @@ public class MetricsHandlerTest {
             ConsensusMetrics.mediaDriverForceBootstrap.set(1);
 
             AeronPrometheusMetrics prometheusMetrics = mock(AeronPrometheusMetrics.class);
-            doThrow(new RuntimeException("boom")).when(prometheusMetrics).updateGaugeValues();
+            doThrow(new RuntimeException("boom")).when(prometheusMetrics).updateMetrics();
 
             ServerContext context = new ServerContext(null, null, storeDir.resolve("missing"), "http://localhost:8090");
             context.aeronPrometheusMetrics = prometheusMetrics;

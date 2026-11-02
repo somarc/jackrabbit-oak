@@ -478,8 +478,6 @@ public class HealthHandlerTest {
         when(healthMonitor.getHealthStatus()).thenReturn("DEGRADED");
         when(healthMonitor.getErrorCount()).thenReturn(2L);
         when(healthMonitor.getTimeoutCount()).thenReturn(3L);
-        when(healthMonitor.getBackpressureCount()).thenReturn(4L);
-        when(healthMonitor.getFreeSpaceMB()).thenReturn(512L);
 
         AeronClusterLauncher launcher = mock(AeronClusterLauncher.class);
         when(launcher.getCrashHandler()).thenReturn(crashHandler);
