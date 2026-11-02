@@ -1296,6 +1296,45 @@ public class AeronConsensusEngineTest {
         assertFalse(engine.sendFederationThroughIngress(SimpleMessageHeader.TEMPLATE_ID_DIRECTORY_UPDATE, "{}"));
     }
 
+    @Test
+    public void sendBinaryReleaseThroughIngressOffersTheRelease() throws Exception {
+        AeronConsensusEngine engine = createEngine();
+        io.aeron.cluster.client.AeronCluster client = installHealthyClient(engine, Cluster.Role.LEADER);
+
+        assertTrue(engine.sendBinaryReleaseThroughIngress(640L, 7L, List.of("ab".repeat(32))));
+
+        CapturedOffer offer = captureOffer(client);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE, offer.templateId);
+        assertEquals("{\"markedAtPosition\":640,\"maxLastModified\":7,\"blobIds\":[\"" + "ab".repeat(32) + "\"]}",
+            offer.json);
+    }
+
+    @Test
+    public void appliedReleasesReachTheBinaryGcListenerWhoseFailuresNeverStopTheMember() throws Exception {
+        org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore store =
+            new org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore();
+        AeronConsensusEngine engine = createEngine(mockFileStore, null, new AeronBackgroundCoordinator(), store);
+        MessageDispatcher dispatcher = (MessageDispatcher) getField(engine, "messageDispatcher");
+        AeronEncodedMessage release = new AeronIngressControlPayloadBuilder()
+            .buildBinaryRelease(1, 0, List.of("ab".repeat(32)));
+        assertTrue("applied without binary GC wiring",
+            dispatcher.dispatch(1L, 640L, release.buffer, 0, release.totalLength));
+
+        List<Integer> skipped = new ArrayList<>();
+        java.io.Closeable resources = mock(java.io.Closeable.class);
+        engine.setBinaryGc(result -> {
+            skipped.add(result.skipped());
+            throw new IllegalStateException("executor gone");
+        }, resources);
+        assertTrue(dispatcher.dispatch(1L, 960L, release.buffer, 0, release.totalLength));
+        assertEquals(List.of(1), skipped);
+        assertEquals(960L, org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition
+            .read(store.getRoot()).position());
+
+        engine.onTerminate(mock(Cluster.class));
+        verify(resources).close();
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void sendFederationThroughIngressRejectsOtherTemplates() {
         createEngine().sendFederationThroughIngress(SimpleMessageHeader.TEMPLATE_ID_GC_PROPOSAL, "{}");

@@ -205,6 +205,25 @@ public class ReplicatedCommandRoundTripTest {
     }
 
     @Test
+    public void binaryReleaseRoundTripsEveryBlobIdAndItsNumbers() {
+        List<String> ids = new ArrayList<>();
+        for (String s : SAMPLES) {
+            ids.add("id" + s);
+        }
+        List<String> calls = new ArrayList<>();
+        MessageDispatcher d = dispatcher(calls);
+        d.setBinaryReleaseCallback((command, position) -> calls.add(String.join("|", "release",
+            String.valueOf(command.get("markedAtPosition")), String.valueOf(command.get("maxLastModified")),
+            String.valueOf(command.get("blobIds")), String.valueOf(position))));
+
+        AeronEncodedMessage encoded = controls.buildBinaryRelease(Long.MAX_VALUE - 1, 1_700_000_000_000L, ids);
+        assertEquals(SimpleMessageHeader.TEMPLATE_ID_BINARY_RELEASE, encoded.templateId);
+        assertTrue(d.dispatch(1L, 4096L, encoded.buffer, 0, encoded.totalLength));
+        assertEquals(Arrays.asList(String.join("|", "release", String.valueOf(Long.MAX_VALUE - 1),
+            "1700000000000", ids.toString(), "position=4096 item=0 term=7")), calls);
+    }
+
+    @Test
     public void payloadLargerThanSixteenBitBlockLengthRoundTrips() {
         StringBuilder big = new StringBuilder();
         while (big.length() < 70_000) {
