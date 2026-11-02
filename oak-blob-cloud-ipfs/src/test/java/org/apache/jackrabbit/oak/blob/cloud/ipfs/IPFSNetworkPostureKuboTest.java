@@ -77,9 +77,9 @@ public class IPFSNetworkPostureKuboTest {
         properties.setProperty(IpfsClientSettings.ENDPOINT, node.apiEndpoint());
         properties.setProperty(IPFSDataStore.NETWORK_POLICY, "private");
         properties.setProperty(IPFSDataStore.SWARM_PROBE_ADDRESS, node.swarmAddress());
+        properties.setProperty("ipfsFilesRoot", "/oak/posture-" + UUID.randomUUID());
         IPFSDataStore dataStore = new IPFSDataStore();
         dataStore.setProperties(properties);
-        dataStore.setIpfsFilesRoot("/oak/posture-" + UUID.randomUUID());
         dataStore.setCacheSize(0);
         dataStore.init(folder.newFolder().getAbsolutePath());
         return dataStore;

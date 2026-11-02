@@ -198,12 +198,12 @@ record IpfsClientSettings(String endpoint, String authorization, Duration connec
         return (int) value;
     }
 
-    private static String string(Map<?, ?> properties, String key) {
+    static String string(Map<?, ?> properties, String key) {
         Object value = properties.get(key);
         return value == null ? null : value.toString();
     }
 
-    private static long number(Map<?, ?> properties, String key, long defaultValue) {
+    static long number(Map<?, ?> properties, String key, long defaultValue) {
         String value = blankToNull(string(properties, key));
         if (value == null) {
             return defaultValue;
@@ -215,7 +215,7 @@ record IpfsClientSettings(String endpoint, String authorization, Duration connec
         }
     }
 
-    private static String blankToNull(String value) {
+    static String blankToNull(String value) {
         return value == null || value.trim().isEmpty() ? null : value.trim();
     }
 }

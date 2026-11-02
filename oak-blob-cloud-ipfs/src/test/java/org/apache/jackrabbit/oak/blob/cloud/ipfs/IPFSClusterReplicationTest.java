@@ -177,9 +177,9 @@ public class IPFSClusterReplicationTest {
         properties.setProperty(IpfsClusterSettings.REPLICATION_MIN, String.valueOf(replicationMin));
         properties.setProperty(IpfsClusterSettings.REPLICATION_MAX, String.valueOf(replicationMax));
         properties.setProperty(IpfsClusterSettings.PIN_TIMEOUT_MILLIS, "30000");
+        properties.setProperty("ipfsFilesRoot", "/oak/validator-" + node + "-" + UUID.randomUUID());
         IPFSDataStore dataStore = new IPFSDataStore();
         dataStore.setProperties(properties);
-        dataStore.setIpfsFilesRoot("/oak/validator-" + node + "-" + UUID.randomUUID());
         dataStore.setCacheSize(0);
         dataStore.setCidResolver(replicatedIndex::get);
         dataStore.init(folder.newFolder().getAbsolutePath());

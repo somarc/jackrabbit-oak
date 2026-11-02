@@ -26,7 +26,6 @@ import org.junit.Test;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.Iterator;
-import java.util.Map;
 
 import static org.junit.Assert.*;
 
@@ -83,16 +82,6 @@ public class IPFSBackendTest {
     public void testGetCIDUnknownIdentifier() {
         DataIdentifier id = new DataIdentifier("unknown-blob-id");
         assertNull(backend.getCID(id));
-    }
-    
-    /**
-     * Test getAllCIDMappings returns empty map initially.
-     */
-    @Test
-    public void testGetAllCIDMappingsEmpty() {
-        Map<String, String> mappings = backend.getAllCIDMappings();
-        assertNotNull(mappings);
-        assertTrue(mappings.isEmpty());
     }
     
     /**
@@ -160,9 +149,7 @@ public class IPFSBackendTest {
         // Close should work even without init
         backend.close();
         
-        // Verify cache is empty
-        Map<String, String> mappings = backend.getAllCIDMappings();
-        assertTrue(mappings.isEmpty());
+        assertNull(backend.getCID(new DataIdentifier("unknown-blob-id")));
     }
     
     /**
