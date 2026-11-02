@@ -51,10 +51,10 @@ public class MixedWriteDeleteBatchApplyTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
-                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String signature, String blobId, String mimeType,
                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
                 writes.applyWriteWithAuditMetadata(walletAddress, path, contentType, message, signature,
-                    intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+                    blobId, mimeType, ipfsCid, auditMetadata);
             }
 
             @Override

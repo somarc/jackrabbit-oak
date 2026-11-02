@@ -66,7 +66,7 @@ public class MessageDispatcher {
      */
     public interface WriteCallback {
         default void applyWrite(String walletAddress, String path, String contentType,
-                                String message, String signature, String intentToken,
+                                String message, String signature,
                                 String blobId, String mimeType, String ipfsCid,
                                 MutationAuditMetadata auditMetadata) {
             throw new UnsupportedOperationException("Write callback must implement applyWrite");
@@ -414,7 +414,6 @@ public class MessageDispatcher {
         String contentType = stringField(json, "contentType");
         String message = stringField(json, "message");
         String signature = stringField(json, "signature");
-        String intentToken = stringField(json, "intentToken"); // ADR 020
         String blobId = stringField(json, "blobId");
         String mimeType = stringField(json, "mimeType");
         String ipfsCid = stringField(json, "ipfsCid"); // ADR 016
@@ -432,11 +431,10 @@ public class MessageDispatcher {
         if (isStaleTerm(longField(json, "term"))) {
             return false;
         }
-        log.debug("✅ Applying write: wallet={}, path={}, intentToken={}",
-            walletAddress, path, intentToken != null ? intentToken : "none");
+        log.debug("✅ Applying write: wallet={}, path={}", walletAddress, path);
         try {
             requireWriteCallback().applyWrite(walletAddress, path, contentType, message, signature,
-                intentToken, blobId, mimeType, ipfsCid, auditMetadata);
+                blobId, mimeType, ipfsCid, auditMetadata);
         } catch (RuntimeException e) {
             return rejectIfInvalid(e, what);
         }

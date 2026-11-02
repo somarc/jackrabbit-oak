@@ -51,7 +51,6 @@ public class QueuedProposal implements java.io.Serializable {
     private volatile long epoch; // Compatibility overlay epoch for queue/reporting surfaces
     private volatile org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier =
         org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier.STANDARD; // Payment tier for priority handling
-    private volatile String intentToken; // Intent token for lazy binary upload (ADR 020)
     private volatile String blobId; // Oak blob ID for eager binary upload
     private volatile String mimeType; // MIME type for binary
     private volatile String ipfsCid; // IPFS CID from client-side upload (ADR 016)
@@ -246,14 +245,6 @@ public class QueuedProposal implements java.io.Serializable {
 
     public void setType(ProposalType type) {
         this.type = type;
-    }
-
-    public String getIntentToken() {
-        return intentToken;
-    }
-
-    public void setIntentToken(String intentToken) {
-        this.intentToken = intentToken;
     }
 
     public String getBlobId() {

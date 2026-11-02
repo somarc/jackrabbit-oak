@@ -66,7 +66,7 @@ public class ReplicatedCommandRoundTripTest {
             List<String> calls = new ArrayList<>();
             assertTrue(dispatch(dispatcher(calls), encoded));
             assertEquals(Arrays.asList(String.join("|",
-                "0xw" + s, "/p" + s, "ct" + s, "msg" + s, "sig" + s, "null",
+                "0xw" + s, "/p" + s, "ct" + s, "msg" + s, "sig" + s,
                 "blob" + s, "mime" + s, "cid" + s,
                 "WRITE", "tx" + s, "corr" + s, "pid" + s, "eth" + s, "1", "2", "3")), calls);
         }
@@ -106,14 +106,13 @@ public class ReplicatedCommandRoundTripTest {
             p.setContentType("ct" + n);
             p.setMessage("msg" + n);
             p.setSignature("sig" + n);
-            p.setIntentToken("intent" + n);
             p.setBlobId("blob" + n);
             p.setMimeType("mime" + n);
             p.setIpfsCid("cid" + n);
             p.setConfirmedBlock(1L);
             batch.add(p);
             expected.add(String.join("|",
-                "0xw" + n, "/p" + n, "ct" + n, "msg" + n, "sig" + n, "intent" + n,
+                "0xw" + n, "/p" + n, "ct" + n, "msg" + n, "sig" + n,
                 "blob" + n, "mime" + n, "cid" + n,
                 "WRITE", "tx" + n, "corr" + n, "pid" + n, "eth" + n, "1", "2", "3"));
         }
@@ -136,7 +135,7 @@ public class ReplicatedCommandRoundTripTest {
             p.setMessage(messages[i]);
             p.setSignature("sig" + i);
             batch.add(p);
-            expected.add(String.join("|", "0xw" + i, "/p" + i, "page", messages[i], "sig" + i, "null",
+            expected.add(String.join("|", "0xw" + i, "/p" + i, "page", messages[i], "sig" + i,
                 "null", "null", "null", "WRITE", "null", "null", "pid" + i, "null", "null", "null", "null"));
         }
 
@@ -154,9 +153,9 @@ public class ReplicatedCommandRoundTripTest {
         List<String> calls = new ArrayList<>();
         assertTrue(dispatch(dispatcher(calls), writes.buildWriteBatch(Arrays.asList(writeA, deleteP, writeP), 7)));
         assertEquals(Arrays.asList(
-            "0xw|/a|page|msg-pid-a|sig-pid-a|null|null|null|null|WRITE|null|null|pid-a|null|null|null|null",
+            "0xw|/a|page|msg-pid-a|sig-pid-a|null|null|null|WRITE|null|null|pid-a|null|null|null|null",
             "delete|0xw|/p|sig-pid-del-p|DELETE|null|null|pid-del-p|null|null|null|null",
-            "0xw|/p|page|msg-pid-p|sig-pid-p|null|null|null|null|WRITE|null|null|pid-p|null|null|null|null"), calls);
+            "0xw|/p|page|msg-pid-p|sig-pid-p|null|null|null|WRITE|null|null|pid-p|null|null|null|null"), calls);
     }
 
     /** Retired GC entries, as the removed encoder wrote them, are accepted and reach no callback. */
@@ -238,7 +237,7 @@ public class ReplicatedCommandRoundTripTest {
 
         List<String> calls = new ArrayList<>();
         assertTrue(dispatch(dispatcher(calls), encoded));
-        assertEquals(Arrays.asList(String.join("|", "0xw", "/p", "page", message, "sig", "null",
+        assertEquals(Arrays.asList(String.join("|", "0xw", "/p", "page", message, "sig",
             "null", "null", "null", "WRITE", "null", "null", "pid", "null", "null", "null", "null")), calls);
     }
 
@@ -266,7 +265,7 @@ public class ReplicatedCommandRoundTripTest {
             "{\"meta\":{\"success\":false,\"memberId\":7},"
                 + "\"proposalId\" : \"pid\", \"memberId\" : 2, \"success\" : true}"));
         assertEquals(Arrays.asList(
-            "0xw|/p|null|null|null|null|null|null|null|WRITE|null|null|null|null|null|null|null",
+            "0xw|/p|null|null|null|null|null|null|WRITE|null|null|null|null|null|null|null",
             "persisted|pid|2|null|true|null"), calls);
     }
 
@@ -285,10 +284,10 @@ public class ReplicatedCommandRoundTripTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
-                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String signature, String blobId, String mimeType,
                                    String ipfsCid, MutationAuditMetadata audit) {
                 calls.add(String.join("|", walletAddress, path, contentType, message, signature,
-                    String.valueOf(intentToken), String.valueOf(blobId), String.valueOf(mimeType),
+                    String.valueOf(blobId), String.valueOf(mimeType),
                     String.valueOf(ipfsCid), audit(audit)));
             }
 

@@ -110,7 +110,6 @@ public class WriteApplicationServiceTest {
             null,
             null,
             null,
-            null,
             MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null));
 
         assertEquals("new-head", newHead);
@@ -173,7 +172,6 @@ public class WriteApplicationServiceTest {
             null,
             null,
             null,
-            null,
             MutationAuditMetadata.write("tx-1", "corr-1", "proposal-audit", "0xeth", null, null, null)
         );
 
@@ -185,7 +183,7 @@ public class WriteApplicationServiceTest {
     @Test
     public void writeTypesEveryContainerOnThePathAndTheRecordAsNames() {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
-        writeService(nodeStore).applyWriteWithAuditMetadata(WALLET, PATH, "page", "hello", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, null, null, null, null, null));
+        writeService(nodeStore).applyWriteWithAuditMetadata(WALLET, PATH, "page", "hello", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, null, null, null, null, null));
 
         NodeState node = nodeStore.getRoot();
         String[] parts = PATH.substring(1).split("/");
@@ -200,8 +198,8 @@ public class WriteApplicationServiceTest {
     public void writeKeepsTheTypeOfAnExistingNodeOnThePath() {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         WriteApplicationService service = writeService(nodeStore);
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "page", "parent", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null));
-        service.applyWriteWithAuditMetadata(WALLET, PATH + "/child", "page", "child", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal-2", null, null, null, null));
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "page", "parent", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null));
+        service.applyWriteWithAuditMetadata(WALLET, PATH + "/child", "page", "child", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "proposal-2", null, null, null, null));
 
         assertEquals(WalletPathUtil.RECORD_TYPE, contentNode(nodeStore, PATH).getName("jcr:primaryType"));
         assertEquals(WalletPathUtil.RECORD_TYPE, contentNode(nodeStore, PATH + "/child").getName("jcr:primaryType"));
@@ -214,7 +212,7 @@ public class WriteApplicationServiceTest {
     }
 
     @Test
-    public void testApplyWriteStoresClientIpfsReferenceAndIntentToken() {
+    public void testApplyWriteStoresClientIpfsReference() {
         FileStore fileStore = fileStoreWithHeads("prev-head", "new-head");
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         FileStoreFlushService flushService = mock(FileStoreFlushService.class);
@@ -227,7 +225,6 @@ public class WriteApplicationServiceTest {
             "asset",
             "plain-text",
             "0xsig",
-            "intent-1",
             null,
             null,
             "bafybeigdyrzt5",
@@ -238,8 +235,6 @@ public class WriteApplicationServiceTest {
         assertEquals("bafybeigdyrzt5", stringProperty(contentNode, "ipfsCid"));
         assertFalse("gateway URLs are node-local and stay out of replicated state",
             contentNode.hasProperty("ipfsGateway"));
-        assertEquals("intent-1", stringProperty(contentNode, "jcr:intentToken"));
-        assertTrue(booleanProperty(contentNode, "jcr:pendingBinary"));
     }
 
     @Test
@@ -254,7 +249,7 @@ public class WriteApplicationServiceTest {
                 WriteApplicationService service = new WriteApplicationService(fileStore, () -> nodeStore, () -> null,
                     mock(FileStoreFlushService.class));
 
-                service.applyWriteWithAuditMetadata(WALLET, PATH, "asset", "plain-text", "0xsig", null, null, null,
+                service.applyWriteWithAuditMetadata(WALLET, PATH, "asset", "plain-text", "0xsig", null, null,
                     "bafybeigdyrzt5", MutationAuditMetadata.write(null, null, null, null, null, null, null));
 
                 applied[member] = contentNode(nodeStore, PATH);
@@ -309,7 +304,6 @@ public class WriteApplicationServiceTest {
             "file",
             "binary-message",
             "0xsig",
-            null,
             "deadbeef#123",
             "image/jpeg",
             null,
@@ -329,7 +323,7 @@ public class WriteApplicationServiceTest {
             fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> (BlobStore) null, flushService);
 
         RuntimeException failure = assertThrows(RuntimeException.class, () -> service.applyWriteWithAuditMetadata(
-            WALLET, PATH, "file", "m", "0xsig", null, "deadbeef#123", "image/jpeg", null, MutationAuditMetadata.write(null, null, "proposal-binary", null, null, null, null)));
+            WALLET, PATH, "file", "m", "0xsig", "deadbeef#123", "image/jpeg", null, MutationAuditMetadata.write(null, null, "proposal-binary", null, null, null, null)));
 
         assertFalse("a node-local failure must not be a deterministic rejection",
             MutationRejectedException.isCauseOf(failure));
@@ -393,10 +387,10 @@ public class WriteApplicationServiceTest {
         MutationAuditMetadata audit = MutationAuditMetadata.write(null, null, "p-replay", null, null, null, null)
             .withAppliedAt(1_000L);
 
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", identifier + "#3",
             "image/png", INDEXED_CID, audit);
         NodeState afterFirst = nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT);
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, identifier + "#3",
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", identifier + "#3",
             "image/png", "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi", audit);
 
         assertEquals(afterFirst, nodeStore.getRoot().getChildNode(ReplicatedBinaryIndex.ROOT));
@@ -437,7 +431,6 @@ public class WriteApplicationServiceTest {
             null,
             null,
             null,
-            null,
             MutationAuditMetadata.write(null, null, "proposal-replay", null, null, null, null));
 
         service.applyWriteWithAuditMetadata(
@@ -446,7 +439,6 @@ public class WriteApplicationServiceTest {
             "page",
             "body",
             "0xsig",
-            null,
             null,
             null,
             null,
@@ -497,7 +489,6 @@ public class WriteApplicationServiceTest {
             null,
             null,
             null,
-            null,
             MutationAuditMetadata.write(null, null, "proposal-deferred", null, null, null, null));
 
         assertEquals("new-head", newHead);
@@ -538,7 +529,6 @@ public class WriteApplicationServiceTest {
                 "page",
                 "body",
                 "0xsig",
-                null,
                 null,
                 null,
                 null,
@@ -606,7 +596,7 @@ public class WriteApplicationServiceTest {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         WriteApplicationService service = new WriteApplicationService(
             fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> null, mock(FileStoreFlushService.class));
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "page", message, "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null));
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "page", message, "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null));
         return contentNode(nodeStore, PATH);
     }
 
@@ -618,8 +608,7 @@ public class WriteApplicationServiceTest {
             fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> null, mock(FileStoreFlushService.class));
         String delegated = FederationFixtures.pathUnder(FederationFixtures.NAMESPACE_A2);
 
-        service.applyWriteWithAuditMetadata(FederationFixtures.WRITER_A, delegated, "page", "{\"t\":1}", "0xsig",
-            null, null, null, null, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null));
+        service.applyWriteWithAuditMetadata(FederationFixtures.WRITER_A, delegated, "page", "{\"t\":1}", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null));
         assertTrue(contentNode(nodeStore, delegated).exists());
         NodeState walletNode = contentNode(nodeStore, WalletPathUtil.getShardRoot(FederationFixtures.NAMESPACE_A2));
         assertEquals("the namespace, not the delegated writer, owns the wallet node",
@@ -631,7 +620,7 @@ public class WriteApplicationServiceTest {
             {FederationFixtures.STRANGER, FederationFixtures.pathUnder(FederationFixtures.STRANGER)},
             {FederationFixtures.WRITER_A, "/oak-chain/aa/bb/cc/" + FederationFixtures.NAMESPACE_A + "/content/x"}}) {
             assertThrows(MutationRejectedException.class, () -> service.applyWriteWithAuditMetadata(attempt[0], attempt[1], "page",
-                "{\"t\":1}", "0xsig", null, null, null, null, MutationAuditMetadata.write(null, null, "p-2", null, null, null, null)));
+                "{\"t\":1}", "0xsig", null, null, null, MutationAuditMetadata.write(null, null, "p-2", null, null, null, null)));
             assertFalse(contentNode(nodeStore, attempt[1]).exists());
         }
     }
@@ -642,7 +631,7 @@ public class WriteApplicationServiceTest {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         WriteApplicationService service = new WriteApplicationService(
             fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> blobStore, mock(FileStoreFlushService.class));
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, "blob-1#3", "image/png",
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", "blob-1#3", "image/png",
             proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
         return contentNode(nodeStore, PATH);
     }
@@ -655,7 +644,7 @@ public class WriteApplicationServiceTest {
         MemoryNodeStore nodeStore = new MemoryNodeStore();
         WriteApplicationService service = new WriteApplicationService(
             fileStoreWithHeads("prev-head", "new-head"), () -> nodeStore, () -> blobStore, mock(FileStoreFlushService.class));
-        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", null, blobId, "image/png",
+        service.applyWriteWithAuditMetadata(WALLET, PATH, "file", "m", "0xsig", blobId, "image/png",
             proposalCid, MutationAuditMetadata.write(null, null, "p-1", null, null, null, null).withAppliedAt(1_000L));
         return nodeStore;
     }
@@ -691,10 +680,6 @@ public class WriteApplicationServiceTest {
 
     private static long longProperty(NodeState node, String name) {
         return node.getProperty(name).getValue(Type.LONG);
-    }
-
-    private static boolean booleanProperty(NodeState node, String name) {
-        return node.getProperty(name).getValue(Type.BOOLEAN);
     }
 
     private static List<String> stringListProperty(NodeState node, String name) {

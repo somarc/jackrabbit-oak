@@ -187,12 +187,12 @@ public class ConsensusApiHandler implements AutoCloseable {
      * Delegates to {@link WriteApplicationService}.
      */
     public void applyReplicatedWriteWithAuditMetadata(String walletAddress, String path, String contentType,
-                                                      String message, String signature, String intentToken,
+                                                      String message, String signature,
                                                       String blobId, String mimeType, String ipfsCid,
                                                       MutationAuditMetadata auditMetadata) {
         writeApplicationService.applyWriteWithAuditMetadata(
             walletAddress, path, contentType, message, signature,
-            intentToken, blobId, mimeType, ipfsCid, auditMetadata
+            blobId, mimeType, ipfsCid, auditMetadata
         );
     }
     

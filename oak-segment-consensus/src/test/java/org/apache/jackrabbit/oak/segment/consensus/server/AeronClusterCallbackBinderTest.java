@@ -56,7 +56,7 @@ public class AeronClusterCallbackBinderTest {
             "tx-2", "corr-2", "proposal-2", null, null, null, 83L
         );
         callback.applyReplicatedWrite(
-            "wallet", "/content", "text/plain", "body", "sig", "intent", "blob", "image/png", "cid",
+            "wallet", "/content", "text/plain", "body", "sig", "blob", "image/png", "cid",
             writeAuditMetadata
         );
         callback.applyReplicatedDelete("wallet", "/content", "sig", deleteAuditMetadata);
@@ -69,7 +69,6 @@ public class AeronClusterCallbackBinderTest {
             org.mockito.Mockito.eq("text/plain"),
             org.mockito.Mockito.eq("body"),
             org.mockito.Mockito.eq("sig"),
-            org.mockito.Mockito.eq("intent"),
             org.mockito.Mockito.eq("blob"),
             org.mockito.Mockito.eq("image/png"),
             org.mockito.Mockito.eq("cid"),

@@ -185,7 +185,7 @@ public class AppliedProposalIndexTest {
     }
 
     private String write(String path, String contentType, String proposalId, long appliedAt) {
-        return writes.applyWriteWithAuditMetadata(WALLET, path, contentType, "m", "0xsig", null, null, null, null,
+        return writes.applyWriteWithAuditMetadata(WALLET, path, contentType, "m", "0xsig", null, null, null,
             audit(MutationAuditMetadata.write(null, null, proposalId, null, null, null, null), appliedAt));
     }
 

@@ -69,9 +69,7 @@ public class ProposalQueueDurabilityRecoveryTest {
             "page",
             "payload",
             "0xsig",
-            ValidatorEarningsTracker.PaymentTier.STANDARD,
-            null
-        );
+            ValidatorEarningsTracker.PaymentTier.STANDARD);
         proposal.setState(ProposalState.PROCESSED);
     }
 

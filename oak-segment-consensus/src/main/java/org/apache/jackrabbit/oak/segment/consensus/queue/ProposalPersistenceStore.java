@@ -111,7 +111,6 @@ final class ProposalPersistenceStore {
         private final String signature;
         private final long epoch;
         private final org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier;
-        private final String intentToken;
         private final String blobId;
         private final String mimeType;
         private final String ipfsCid;
@@ -141,7 +140,6 @@ final class ProposalPersistenceStore {
                                String signature,
                                long epoch,
                                org.apache.jackrabbit.oak.segment.consensus.economics.ValidatorEarningsTracker.PaymentTier tier,
-                               String intentToken,
                                String blobId,
                                String mimeType,
                                String ipfsCid,
@@ -169,7 +167,6 @@ final class ProposalPersistenceStore {
             this.signature = signature;
             this.epoch = epoch;
             this.tier = tier;
-            this.intentToken = intentToken;
             this.blobId = blobId;
             this.mimeType = mimeType;
             this.ipfsCid = ipfsCid;
@@ -201,7 +198,6 @@ final class ProposalPersistenceStore {
                 proposal.getSignature(),
                 proposal.getEpoch(),
                 proposal.getTier(),
-                proposal.getIntentToken(),
                 proposal.getBlobId(),
                 proposal.getMimeType(),
                 proposal.getIpfsCid(),
@@ -237,7 +233,6 @@ final class ProposalPersistenceStore {
             proposal.setSignature(signature);
             proposal.setEpoch(epoch);
             proposal.setTier(tier);
-            proposal.setIntentToken(intentToken);
             proposal.setBlobId(blobId);
             proposal.setMimeType(mimeType);
             proposal.setIpfsCid(ipfsCid);

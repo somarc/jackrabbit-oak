@@ -428,7 +428,7 @@ public class AeronConsensusEngineTest {
         engine.setWriteApplicationCallback(new AeronConsensusEngine.WriteApplicationCallback() {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                             String signature, String intentToken, String blobId, String mimeType,
+                                             String signature, String blobId, String mimeType,
                                              String ipfsCid, org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata auditMetadata) {
                 applied.add(path + "@" + auditMetadata.getAppliedLogPosition());
             }
@@ -456,7 +456,7 @@ public class AeronConsensusEngineTest {
         engine.setWriteApplicationCallback(new AeronConsensusEngine.WriteApplicationCallback() {
             @Override
             public void applyReplicatedWrite(String walletAddress, String path, String contentType, String message,
-                                             String signature, String intentToken, String blobId, String mimeType,
+                                             String signature, String blobId, String mimeType,
                                              String ipfsCid, org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata auditMetadata) {
                 applies.incrementAndGet();
                 throw new RuntimeException("Failed to apply replicated write",
@@ -1263,7 +1263,6 @@ public class AeronConsensusEngineTest {
         first.setContentType("page");
         first.setMessage("hello");
         first.setSignature("sig-a");
-        first.setIntentToken("intent-5");
 
         QueuedProposal second = proposal("proposal-6");
         second.setWalletAddress("0xbbb");
@@ -1280,7 +1279,6 @@ public class AeronConsensusEngineTest {
         CapturedOffer offer = captureOffer(client);
         assertEquals(SimpleMessageHeader.TEMPLATE_ID_WRITE_BATCH, offer.templateId);
         assertTrue(offer.json.contains("\"proposalId\":\"proposal-5\""));
-        assertTrue(offer.json.contains("\"intentToken\":\"intent-5\""));
         assertTrue(offer.json.contains("\"proposalId\":\"proposal-6\""));
         assertTrue(offer.json.contains("\"blobId\":\"blob-6\""));
         assertTrue(offer.json.contains("\"mimeType\":\"image/jpeg\""));
@@ -1442,7 +1440,7 @@ public class AeronConsensusEngineTest {
         MessageDispatcher dispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             @Override
             public void applyWrite(String walletAddress, String path, String contentType, String message,
-                                   String signature, String intentToken, String blobId, String mimeType,
+                                   String signature, String blobId, String mimeType,
                                    String ipfsCid, MutationAuditMetadata auditMetadata) {
                 applied.add(auditMetadata.getProposalId());
             }

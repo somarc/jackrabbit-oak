@@ -579,7 +579,6 @@ public class ConsensusApiHandlerTest {
                     null,
                     null,
                     null,
-                    null,
                     MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null)
                 );
 
@@ -657,7 +656,6 @@ public class ConsensusApiHandlerTest {
             "file",
             "{\"title\":\"Hello\"}",
             "0xsig",
-            null,
             "blob-123#42",
             "image/jpeg",
             "QmBinaryCid",
@@ -699,7 +697,6 @@ public class ConsensusApiHandlerTest {
             "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
             "page",
             "{\"title\":\"Hello\"}",
-            null,
             null,
             null,
             null,

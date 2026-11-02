@@ -260,8 +260,8 @@ public class AeronIngressHandlerTest {
         DeleteApplicationService deletes = new DeleteApplicationService(fileStore, () -> store, flush);
         MessageDispatcher realDispatcher = new MessageDispatcher(new MessageDispatcher.WriteCallback() {
             public void applyWrite(String wallet, String path, String type, String message, String signature,
-                                   String intent, String blob, String mime, String cid, MutationAuditMetadata metadata) {
-                writes.applyWriteWithAuditMetadata(wallet, path, type, message, signature, intent, blob, mime, cid, metadata);
+                                   String blob, String mime, String cid, MutationAuditMetadata metadata) {
+                writes.applyWriteWithAuditMetadata(wallet, path, type, message, signature, blob, mime, cid, metadata);
             }
             public void applyDelete(String wallet, String path, String signature, MutationAuditMetadata metadata) {
                 deletes.applyDeleteWithAuditMetadata(wallet, path, signature, metadata);

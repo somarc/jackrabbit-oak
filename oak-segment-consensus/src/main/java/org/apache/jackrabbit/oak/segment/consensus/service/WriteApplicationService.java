@@ -127,7 +127,6 @@ public class WriteApplicationService {
      * @param contentType Content type (e.g., "page", "asset")
      * @param message Content message/body
      * @param signature Cryptographic signature (required)
-     * @param intentToken Intent token for lazy uploads (ADR 020)
      * @param blobId Blob ID for binary content
      * @param mimeType MIME type for binary content
      * @param ipfsCid IPFS CID from client-side upload (ADR 016)
@@ -143,7 +142,6 @@ public class WriteApplicationService {
             @Nullable String contentType,
             @Nullable String message,
             @NotNull String signature,
-            @Nullable String intentToken,
             @Nullable String blobId,
             @Nullable String mimeType,
             @Nullable String ipfsCid,
@@ -155,8 +153,8 @@ public class WriteApplicationService {
         
         try {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
-            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
-                     walletAddress, path, intentToken, blobId, ipfsCid);
+            log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, blobId={}, ipfsCid={}",
+                     walletAddress, path, blobId, ipfsCid);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
             NodeState root = nodeStore.getRoot();
             if (AppliedProposalIndex.find(root, proposalId) != null) {
@@ -245,13 +243,6 @@ public class WriteApplicationService {
                 // No gateway URL: it depends on this node's settings, and replicated state must not.
                 contentNode.setProperty("ipfsCid", ipfsCid);
                 log.debug("🔗 Stored pure IPFS reference (no local blob): ipfsCid={}", ipfsCid);
-            }
-            
-            // Handle intent token for lazy uploads (ADR 020)
-            if (intentToken != null && !intentToken.isEmpty()) {
-                contentNode.setProperty("jcr:intentToken", intentToken);
-                contentNode.setProperty("jcr:pendingBinary", true);
-                log.debug("📎 Intent token stored for lazy binary upload: {}", intentToken);
             }
             
             AppliedProposalIndex.record(rootBuilder, proposalId, MutationAuditMetadata.Operation.WRITE, path, appliedAt);

@@ -103,7 +103,6 @@ final class AeronIngressWritePayloadBuilder {
             }
             appendWriteFields(json, proposal.getWalletAddress(), proposal.getPath(), proposal.getContentType(),
                 proposal.getMessage(), proposal.getSignature());
-            appendOptional(json, "intentToken", proposal.getIntentToken());
             appendBinary(json, proposal.getBlobId(), proposal.getMimeType());
             appendOptional(json, "ipfsCid", proposal.getIpfsCid());
 

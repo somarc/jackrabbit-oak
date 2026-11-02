@@ -93,7 +93,7 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
             proof(declaredTxHash, WALLET, CONTRACT, proposalId, "1", PaymentProof.ProposalKind.WRITE),
             queueManager -> queueManager.queueProposal(proposalId, declaredTxHash, WALLET,
                 WALLET_ROOT + "/content/page-binary", "page", "message", "",
-                ValidatorEarningsTracker.PaymentTier.STANDARD, null, "blob-1", "application/octet-stream", null),
+                ValidatorEarningsTracker.PaymentTier.STANDARD, "blob-1", "application/octet-stream", null),
             "CAPABILITY_VALIDATOR_HOSTED_BINARY");
     }
 
@@ -148,7 +148,7 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
                 proof(declaredTxHash, WALLET, CONTRACT, proposalId, "1", PaymentProof.ProposalKind.WRITE),
                 queueManager -> queueManager.queueProposal(proposalId, declaredTxHash, WALLET,
                     WALLET_ROOT + "/content/page-signature-unavailable", "page", "message", "0x" + "1".repeat(130),
-                    ValidatorEarningsTracker.PaymentTier.STANDARD, null),
+                    ValidatorEarningsTracker.PaymentTier.STANDARD),
                 "Full Ethereum signature verification unavailable", "simulated verifier outage"));
     }
 
@@ -185,7 +185,7 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
         assertSignatureCheckpointPasses(proposalId, PaymentProof.ProposalKind.WRITE, queueManager ->
             queueManager.queueProposal(proposalId, SIGNED_TX_HASH, signerWallet(), shardPath("content/page-write-signed"),
                 "page", "signed message", personalSign("signed message"),
-                ValidatorEarningsTracker.PaymentTier.STANDARD, null));
+                ValidatorEarningsTracker.PaymentTier.STANDARD));
     }
 
     private static final String SIGNER_PRIVATE_KEY = "4c0883a6910395bda8e1ab1b5f9f1cc0aa1f4b3f8718abf3483c796f9649b7fd";
@@ -294,7 +294,7 @@ public class ProposalQueueManagerV1ModeGuardrailsTest {
 
     private static QueueAction write(String proposalId, String txHash, String leaf) {
         return queueManager -> queueManager.queueProposal(proposalId, txHash, WALLET, WALLET_ROOT + "/content/" + leaf,
-            "page", "message", "", ValidatorEarningsTracker.PaymentTier.STANDARD, null);
+            "page", "message", "", ValidatorEarningsTracker.PaymentTier.STANDARD);
     }
 
     private static long verifierSuccessCount(ProposalQueueManagerOptimized queueManager) {

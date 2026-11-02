@@ -55,4 +55,24 @@ public class ProposalPersistenceStoreTest {
         assertEquals(Long.valueOf(7L), proposal.getConfirmedBlock());
         assertNull(proposal.toAuditMetadata().getTransactionId());
     }
+
+    /** The fixture was written while proposals still carried the ADR 020 intent token; loading skips that field. */
+    @Test
+    public void loadsFileWrittenWithAnIntentToken() throws Exception {
+        Path dir = folder.newFolder().toPath();
+        try (InputStream in = getClass().getResourceAsStream("queued-proposals-with-intent-token.bin")) {
+            Files.copy(in, dir.resolve("queued-proposals.bin"));
+        }
+
+        List<QueuedProposal> loaded = new ProposalPersistenceStore(dir).load();
+
+        assertEquals(1, loaded.size());
+        QueuedProposal proposal = loaded.get(0);
+        assertEquals("intent-proposal-1", proposal.getProposalId());
+        assertEquals(ProposalState.VERIFIED, proposal.getState());
+        assertEquals("0x2222222222222222222222222222222222222222", proposal.getWalletAddress());
+        assertEquals("/oak-chain/22/22/22/0x2222222222222222222222222222222222222222/content/doc", proposal.getPath());
+        assertEquals("image/png", proposal.getMimeType());
+        assertEquals("0xsig", proposal.getSignature());
+    }
 }
