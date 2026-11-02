@@ -203,9 +203,6 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/events/stream", "Event stream (SSE)", "Events", "/ops/v1/events/*");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/ops/events/stream", "Ops event stream (SSE)", "Events", "/ops/v1/events/*");
 
-        addInternalIndexEntry(endpoints, "POST", "/v1/binary/declare-intent", "Declare binary upload intent", "Binary", null);
-        addInternalIndexEntry(endpoints, "GET", "/v1/binary/check-intent/{token}", "Check binary intent", "Binary", null);
-        addInternalIndexEntry(endpoints, "POST", "/v1/binary/complete-upload", "Complete binary upload", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/binary/download-url/{blobId}?ttl=300", "Issue a signed, expiring download URL", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/ops/ipfs/health", "IPFS node, cluster, encryption and network status with operation counts", "Binary", null);
         addInternalIndexEntry(endpoints, "GET", "/v1/ops/ipfs/verify?limit=1000", "Check that stored binaries are pinned or replicated", "Binary", null);

@@ -24,7 +24,6 @@ import org.apache.jackrabbit.oak.segment.consensus.federation.FederationCoordina
 import org.apache.jackrabbit.oak.segment.consensus.mount.MountReadFailures;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.AeronApiHandler;
-import org.apache.jackrabbit.oak.segment.http.server.handlers.BinaryUploadHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.BlockchainConfigApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.CidApiHandler;
 import org.apache.jackrabbit.oak.segment.http.server.handlers.ConsensusApiHandler;
@@ -89,8 +88,6 @@ public class RequestRouter implements AutoCloseable {
 
     private final ConsensusApiHandler consensusApiHandler;
     private final EventBroadcaster eventBroadcaster;
-    private final org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager;
-    private final BinaryUploadHandler binaryUploadHandler;
     private final AuthTokenValidator authValidator;
     private final BlobUrlSigner blobUrlSigner;
     private final RateLimiter rateLimiter;
@@ -141,13 +138,6 @@ public class RequestRouter implements AutoCloseable {
         RegistrationHandler registrationHandler = new RegistrationHandler(context);
         PeerDiscoveryHandler peerDiscoveryHandler = new PeerDiscoveryHandler(context);
         AeronApiHandler aeronApiHandler = new AeronApiHandler(context);
-        
-        // Binary upload handler (ADR 020 - lazy upload on confirmation)
-        this.uploadSessionManager = new org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager();
-        this.binaryUploadHandler = new BinaryUploadHandler(uploadSessionManager);
-
-        // Make session manager available in context for dashboard metrics
-        context.setUploadSessionManager(uploadSessionManager);
         
         // CID API handler (Oak ↔ IPFS CID mapping)
         CidApiHandler cidApiHandler = new CidApiHandler(context);
@@ -243,14 +233,11 @@ public class RequestRouter implements AutoCloseable {
             }
         });
 
-        // Proposals and binary upload (ADR 020)
+        // Proposals and binary downloads
         post("/v1/propose-write", (req, res, path) -> writeProposalHandler.handleProposeWrite(req, res));
         post("/v1/propose-delete", (req, res, path) -> deleteProposalHandler.handleDeleteProposal(req, res));
-        post("/v1/binary/declare-intent", (req, res, path) -> binaryUploadHandler.handleDeclareIntent(req, res));
-        prefix("GET", "/v1/binary/check-intent/", (req, res, path) -> binaryUploadHandler.handleCheckIntent(req, res));
         prefix("GET", "/v1/binary/download-url/", (req, res, path) ->
             handleDownloadUrl(req, res, path.substring("/v1/binary/download-url/".length())));
-        post("/v1/binary/complete-upload", (req, res, path) -> binaryUploadHandler.handleCompleteUpload(req, res));
 
         get("/v1/head", (req, res, path) -> handleHead(res));
         get("/v1/federation", (req, res, path) -> handleFederation(res));
@@ -670,15 +657,6 @@ public class RequestRouter implements AutoCloseable {
     }
     
     /**
-     * Get the binary upload handler (for integration with other components).
-     * 
-     * @return the binary upload handler
-     */
-    public BinaryUploadHandler getBinaryUploadHandler() {
-        return binaryUploadHandler;
-    }
-    
-    /**
      * Get the event broadcaster (for emitting SSE events from other components).
      * 
      * @return the event broadcaster
@@ -699,11 +677,6 @@ public class RequestRouter implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Failed to shutdown event broadcaster", e);
         }
-        try {
-            uploadSessionManager.shutdown();
-        } catch (RuntimeException e) {
-            log.warn("Failed to shutdown upload session manager", e);
-        }
         if (context.cidMappingService != null) {
             try {
                 context.cidMappingService.close();
@@ -717,7 +690,6 @@ public class RequestRouter implements AutoCloseable {
             log.warn("Failed to shutdown rate limiter", e);
         }
         context.eventBroadcaster = null;
-        context.uploadSessionManager = null;
         context.cidMappingService = null;
     }
 }
