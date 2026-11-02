@@ -30,6 +30,7 @@ import io.aeron.cluster.service.ClusterMarkFile;
 import io.aeron.cluster.service.ClusteredService;
 import io.aeron.cluster.service.ClusteredServiceContainer;
 import io.aeron.driver.MediaDriver;
+import org.agrona.concurrent.EpochClock;
 import org.agrona.concurrent.ShutdownSignalBarrier;
 import org.agrona.concurrent.SystemEpochClock;
 import org.junit.Rule;
@@ -44,8 +45,8 @@ import static org.mockito.Mockito.mock;
 
 /**
  * The media driver directory and the cluster/archive mark files belong to whichever process is alive in them.
- * Startup refuses to run over a live owner and never deletes a mark file; a dead media directory is cleared by
- * the media driver itself, which saves its error log first.
+ * Startup waits for a killed owner's files to go stale, refuses to run over a live owner and never deletes a mark
+ * file; a dead media directory is cleared by the media driver itself, which saves its error log first.
  */
 public class AeronDirectoryOwnershipTest {
 
@@ -72,7 +73,9 @@ public class AeronDirectoryOwnershipTest {
                 assertTrue(expected.getMessage(), expected.getMessage().contains(mediaDir.getAbsolutePath()));
                 assertTrue(expected.getMessage(), expected.getMessage().contains("active"));
             }
-            assertEquals(1, attempts.get());
+            assertEquals("a live driver keeps its heartbeat fresh through the whole wait (driverTimeoutMs + margin)",
+                (10_000 + AeronClusterLauncher.STALE_OWNER_MARGIN_MS) / AeronClusterLauncher.STALE_OWNER_POLL_MS + 1,
+                attempts.get());
             assertTrue(new File(mediaDir, "cnc.dat").exists());
         }
     }
@@ -128,9 +131,35 @@ public class AeronDirectoryOwnershipTest {
 
             assertRefused(() -> launcher.launchMediaDriver(contexts(tempFolder.getRoot()), "unused"), clusterDir);
             assertRefused(() -> launcher.launchClusteredServiceContainer(contexts(tempFolder.getRoot())), clusterDir);
-            assertEquals("one attempt per launch, no retries", 2, attempts.get());
+            long perLaunch = (AeronClusterLauncher.MARK_FILE_LIVENESS_TIMEOUT_MS
+                + AeronClusterLauncher.STALE_OWNER_MARGIN_MS) / AeronClusterLauncher.STALE_OWNER_POLL_MS + 1;
+            assertEquals("a live owner is retried until the bound, then refused", 2 * perLaunch, attempts.get());
             assertTrue(markFile.exists());
         }
+    }
+
+    @Test
+    public void killedOwnersMarkFileIsWaitedOutAndKept() throws Exception {
+        File clusterDir = tempFolder.newFolder("killed", "cluster");
+        File markFile = new File(clusterDir, ClusterMarkFile.FILENAME);
+        long killedAt = SystemEpochClock.INSTANCE.time();
+        // Closing without a shutdown signal leaves the last heartbeat behind, as SIGKILL does
+        markFile(markFile, () -> killedAt).close();
+        VirtualLaunchTime time = new VirtualLaunchTime();
+        long waitStart = time.getAsLong();
+        EpochClock restartClock = () -> killedAt + (time.getAsLong() - waitStart);
+        ClusteredMediaDriver started = mock(ClusteredMediaDriver.class);
+        AtomicInteger attempts = new AtomicInteger();
+        AeronClusterLauncher launcher = launcher(contexts -> {
+            attempts.incrementAndGet();
+            markFile(markFile, restartClock).close();
+            return started;
+        }, context -> mock(ClusteredServiceContainer.class), time);
+
+        assertEquals(started, launcher.launchMediaDriver(contexts(tempFolder.getRoot()), "unused"));
+        assertEquals(ClusteredServiceContainer.Configuration.LIVENESS_TIMEOUT_MS, time.paused());
+        assertEquals(time.pauses() + 1, attempts.get());
+        assertTrue(markFile.exists());
     }
 
     @Test
@@ -161,11 +190,16 @@ public class AeronDirectoryOwnershipTest {
     }
 
     private static ClusterMarkFile activeMarkFile(File file) {
+        return markFile(file, SystemEpochClock.INSTANCE);
+    }
+
+    /** Opens the mark file as a consensus module does, refusing an active one by the given clock. */
+    private static ClusterMarkFile markFile(File file, EpochClock clock) {
         ClusterMarkFile markFile = new ClusterMarkFile(file, ClusterComponentType.CONSENSUS_MODULE,
-            ClusterMarkFile.ERROR_BUFFER_MIN_LENGTH, SystemEpochClock.INSTANCE,
+            ClusterMarkFile.ERROR_BUFFER_MIN_LENGTH, clock,
             ClusteredServiceContainer.Configuration.LIVENESS_TIMEOUT_MS, 4096);
         markFile.signalReady();
-        markFile.updateActivityTimestamp(SystemEpochClock.INSTANCE.time());
+        markFile.updateActivityTimestamp(clock.time());
         return markFile;
     }
 
@@ -197,7 +231,14 @@ public class AeronDirectoryOwnershipTest {
 
     private static AeronClusterLauncher launcher(AeronClusterLauncher.LaunchInvoker driver,
                                                  AeronClusterLauncher.ContainerLaunchInvoker container) {
+        return launcher(driver, container, new VirtualLaunchTime());
+    }
+
+    private static AeronClusterLauncher launcher(AeronClusterLauncher.LaunchInvoker driver,
+                                                 AeronClusterLauncher.ContainerLaunchInvoker container,
+                                                 VirtualLaunchTime time) {
         return new AeronClusterLauncher(0, List.of("node-0"), new File("."), mock(ClusteredService.class),
-            mock(AeronClusterAddressResolver.class), mock(AeronClusterErrorPolicy.class), driver, container);
+            mock(AeronClusterAddressResolver.class), mock(AeronClusterErrorPolicy.class), driver, container,
+            time, time);
     }
 }

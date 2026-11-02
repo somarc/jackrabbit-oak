@@ -41,6 +41,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongFunction;
+import java.util.function.LongSupplier;
 
 /**
  * Launcher for Aeron Cluster consensus engine.
@@ -68,6 +70,14 @@ public class AeronClusterLauncher {
     private static final long DEFAULT_SESSION_TIMEOUT_SECONDS = 30;
     private static final String SESSION_TIMEOUT_SECONDS_PROPERTY = "oak.cluster.session.timeout.seconds";
     private static final String SESSION_TIMEOUT_MINUTES_PROPERTY = "oak.cluster.session.timeout.minutes";
+    /**
+     * How long Aeron treats a cluster or archive mark file as owned after its last heartbeat. Aeron 1.53 fixes it
+     * (10 heartbeats of 1 s) for both the cluster mark files and, through Archive.Configuration, the archive's.
+     */
+    static final long MARK_FILE_LIVENESS_TIMEOUT_MS = ClusteredServiceContainer.Configuration.LIVENESS_TIMEOUT_MS;
+    /** Added to a liveness timeout so the owner's last heartbeat has certainly aged past it. */
+    static final long STALE_OWNER_MARGIN_MS = 5_000;
+    static final long STALE_OWNER_POLL_MS = 1_000;
     
     private final int nodeId;
     private final List<String> hostnames;
@@ -77,6 +87,8 @@ public class AeronClusterLauncher {
     private final AeronClusterErrorPolicy errorPolicy;
     private final LaunchInvoker launchInvoker;
     private final ContainerLaunchInvoker containerLaunchInvoker;
+    private final LongSupplier clockMs;
+    private final Pause pause;
     
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
@@ -110,6 +122,20 @@ public class AeronClusterLauncher {
                          AeronClusterErrorPolicy errorPolicy,
                          LaunchInvoker launchInvoker,
                          ContainerLaunchInvoker containerLaunchInvoker) {
+        this(nodeId, hostnames, baseDir, clusteredService, addressResolver, errorPolicy, launchInvoker,
+            containerLaunchInvoker, () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()), Thread::sleep);
+    }
+
+    AeronClusterLauncher(int nodeId,
+                         List<String> hostnames,
+                         File baseDir,
+                         ClusteredService clusteredService,
+                         AeronClusterAddressResolver addressResolver,
+                         AeronClusterErrorPolicy errorPolicy,
+                         LaunchInvoker launchInvoker,
+                         ContainerLaunchInvoker containerLaunchInvoker,
+                         LongSupplier clockMs,
+                         Pause pause) {
         this.nodeId = nodeId;
         this.hostnames = hostnames;
         this.baseDir = baseDir;
@@ -118,6 +144,8 @@ public class AeronClusterLauncher {
         this.errorPolicy = errorPolicy;
         this.launchInvoker = launchInvoker;
         this.containerLaunchInvoker = containerLaunchInvoker;
+        this.clockMs = clockMs;
+        this.pause = pause;
     }
     
     /**
@@ -343,32 +371,111 @@ public class AeronClusterLauncher {
         return errorPolicy.createHandler(context, log);
     }
 
+    /**
+     * Launches the media driver, archive and consensus module. A driver directory or mark file still owned by a
+     * killed process is waited out: the launch is retried with fresh contexts until its owner's heartbeat ages past
+     * the liveness timeout, and refused as before if it is still active after that timeout plus a margin. Nothing
+     * is deleted; a live owner keeps its heartbeat fresh and is always refused.
+     */
     ClusteredMediaDriver launchMediaDriver(AeronClusterContextFactory.LaunchContexts contexts, String aeronDirName) {
-        for (int attempt = 1; attempt <= 4; attempt++) {
+        StaleOwnerWait wait = new StaleOwnerWait("ClusteredMediaDriver");
+        int timeouts = 0;
+        while (true) {
             try {
-                return launchInvoker.launch(contexts.freshCopy());
+                ClusteredMediaDriver driver = launchInvoker.launch(contexts.freshCopy());
+                wait.started();
+                return driver;
             } catch (DriverTimeoutException ex) {
-                if (attempt == 4 || !deleteCncFileIfUninitialised(ex, aeronDirName)) {
+                if (++timeouts == 4 || !deleteCncFileIfUninitialised(ex, aeronDirName)) {
                     throw ex;
                 }
             } catch (ActiveDriverException ex) {
-                throw new IllegalStateException("Aeron media driver directory " + aeronDirName
-                    + " is active: its cnc.dat heartbeat is younger than driverTimeoutMs="
-                    + contexts.mediaDriverContext.driverTimeoutMs() + ", so another process owns it. "
-                    + "Refusing to start; stop that process (a killed driver stays active until its heartbeat "
-                    + "ages past the timeout). The directory is not deleted.", ex);
+                long driverTimeoutMs = contexts.mediaDriverContext.driverTimeoutMs();
+                wait.await(new File(aeronDirName, "cnc.dat"), driverTimeoutMs, waitedMs -> new IllegalStateException(
+                    "Aeron media driver directory " + aeronDirName
+                    + " is active: its cnc.dat heartbeat is younger than driverTimeoutMs=" + driverTimeoutMs
+                    + ", so another process owns it. Refusing to start; stop that process (a killed driver stays "
+                    + "active until its heartbeat ages past the timeout). The directory is not deleted. "
+                    + waited(waitedMs), ex));
             } catch (IllegalStateException ex) {
-                throw refuseActiveMarkFile(ex);
+                awaitStaleMarkFile(wait, ex);
             }
         }
-        throw new IllegalStateException("Aeron ClusteredMediaDriver launch did not complete");
     }
 
     ClusteredServiceContainer launchClusteredServiceContainer(AeronClusterContextFactory.LaunchContexts contexts) {
-        try {
-            return containerLaunchInvoker.launch(contexts.freshCopy().clusteredServiceContext);
-        } catch (IllegalStateException ex) {
-            throw refuseActiveMarkFile(ex);
+        StaleOwnerWait wait = new StaleOwnerWait("ClusteredServiceContainer");
+        while (true) {
+            try {
+                ClusteredServiceContainer launched =
+                    containerLaunchInvoker.launch(contexts.freshCopy().clusteredServiceContext);
+                wait.started();
+                return launched;
+            } catch (IllegalStateException ex) {
+                awaitStaleMarkFile(wait, ex);
+            }
+        }
+    }
+
+    /** Rethrows {@code ex} unless it reports an active mark file, which is waited out. */
+    private static void awaitStaleMarkFile(StaleOwnerWait wait, IllegalStateException ex) {
+        File markFile = activeMarkFile(ex);
+        if (markFile == null) {
+            throw ex;
+        }
+        wait.await(markFile, MARK_FILE_LIVENESS_TIMEOUT_MS, waitedMs -> refuseActiveMarkFile(ex, markFile, waitedMs));
+    }
+
+    private static String waited(long waitedMs) {
+        return "Waited " + waitedMs + " ms for it to go stale.";
+    }
+
+    /**
+     * One launch's wait for files owned by a previous process. The bound runs from the first refusal and is the
+     * longest liveness timeout seen plus {@link #STALE_OWNER_MARGIN_MS}: every file of a killed process started
+     * ageing when it died.
+     */
+    private final class StaleOwnerWait {
+        private final String component;
+        private long since = -1;
+        private long boundMs;
+
+        StaleOwnerWait(String component) {
+            this.component = component;
+        }
+
+        void await(File owned, long livenessTimeoutMs, LongFunction<RuntimeException> refusal) {
+            long now = clockMs.getAsLong();
+            if (since < 0) {
+                since = now;
+                boundMs = livenessTimeoutMs + STALE_OWNER_MARGIN_MS;
+                log.warn("Aeron {} cannot start yet: {} is active (heartbeat younger than its {} ms liveness "
+                        + "timeout). A killed owner stays active until then, so retrying every {} ms for up to {} ms; "
+                        + "nothing is deleted and a live owner is refused.", component, owned, livenessTimeoutMs,
+                    STALE_OWNER_POLL_MS, boundMs);
+            } else {
+                boundMs = Math.max(boundMs, livenessTimeoutMs + STALE_OWNER_MARGIN_MS);
+                log.debug("Aeron {} still waiting: {} is active", component, owned);
+            }
+            long waitedMs = now - since;
+            if (waitedMs >= boundMs) {
+                RuntimeException refused = refusal.apply(waitedMs);
+                log.warn("Aeron {} refused after waiting {} ms: {}", component, waitedMs, refused.getMessage());
+                throw refused;
+            }
+            try {
+                pause.pause(Math.min(STALE_OWNER_POLL_MS, boundMs - waitedMs));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for " + owned + " to go stale", e);
+            }
+        }
+
+        void started() {
+            if (since >= 0) {
+                log.info("Aeron {} started after waiting {} ms for the previous owner's files to go stale",
+                    component, clockMs.getAsLong() - since);
+            }
         }
     }
     
@@ -454,18 +561,22 @@ public class AeronClusterLauncher {
 
     /**
      * Agrona reports a cluster or archive mark file whose activity timestamp is within the component's
-     * liveness timeout as "active mark file detected: path". Its owner may be alive, so never delete it.
+     * liveness timeout as "active mark file detected: path"; returns that path, or null for any other failure.
      */
-    static IllegalStateException refuseActiveMarkFile(IllegalStateException ex) {
+    static File activeMarkFile(IllegalStateException ex) {
         String message = ex.getMessage();
         String prefix = "active mark file detected:";
         if (message == null || !message.contains(prefix)) {
-            return ex;
+            return null;
         }
-        File markFile = new File(message.substring(message.indexOf(prefix) + prefix.length()).trim());
+        return new File(message.substring(message.indexOf(prefix) + prefix.length()).trim());
+    }
+
+    /** The refusal for a mark file still active after the wait. Its owner may be alive, so it is never deleted. */
+    static IllegalStateException refuseActiveMarkFile(IllegalStateException ex, File markFile, long waitedMs) {
         return new IllegalStateException("Aeron mark file " + markFile + " is active, so another process owns "
             + markFile.getAbsoluteFile().getParent() + ". Refusing to start; stop that process (a killed one stays "
-            + "active until the liveness timeout passes). Mark files are never deleted.", ex);
+            + "active until the liveness timeout passes). Mark files are never deleted. " + waited(waitedMs), ex);
     }
 
     static final class SessionTimeoutConfig {
@@ -486,6 +597,11 @@ public class AeronClusterLauncher {
         );
 
         ClusteredMediaDriver launch(AeronClusterContextFactory.LaunchContexts contexts);
+    }
+
+    /** Waits between launch attempts; a seam for tests. */
+    interface Pause {
+        void pause(long millis) throws InterruptedException;
     }
 
     interface ContainerLaunchInvoker {
