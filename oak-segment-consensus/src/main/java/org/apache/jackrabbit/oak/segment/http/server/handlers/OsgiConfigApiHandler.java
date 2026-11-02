@@ -534,7 +534,7 @@ public class OsgiConfigApiHandler {
             "adaptive-active",
             "runtime-readable",
             "guarded",
-            "Verified release pipeline mode (adaptive-shadow or adaptive-active; epoch is accepted as a deprecated alias for adaptive-active)",
+            "Verified release pipeline mode (adaptive-active is the only mode; every other value resolves to it)",
             "oak.proposal.release.mode"));
         schema.add(schemaEntry(
             "proposalQueueTuning.validator_hosted_binary_upload_enabled",
