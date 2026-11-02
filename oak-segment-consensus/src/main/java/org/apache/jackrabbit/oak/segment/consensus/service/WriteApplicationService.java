@@ -198,8 +198,12 @@ public class WriteApplicationService {
             log.debug("✈️  APPLYING REPLICATED WRITE: wallet={}, path={}, intentToken={}, blobId={}, ipfsCid={}", 
                      walletAddress, path, intentToken, blobId, ipfsCid);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
+            NodeState root = nodeStore.getRoot();
+            if (AppliedProposalIndex.find(root, proposalId) != null) {
+                return acknowledgeDuplicateReplay(proposalId);
+            }
             // Federated clusters decide ownership from the committed directory; null means unfederated
-            String namespace = NamespaceAuthority.requireWritable(nodeStore.getRoot(), walletAddress, path);
+            String namespace = NamespaceAuthority.requireWritable(root, walletAddress, path);
             BlobStore blobStore = blobStoreSupplier.get();
             
             // Get current HEAD for logging
@@ -223,7 +227,7 @@ public class WriteApplicationService {
             }
             
             // Build node structure
-            NodeBuilder rootBuilder = nodeStore.getRoot().builder();
+            NodeBuilder rootBuilder = root.builder();
             NodeBuilder current = rootBuilder;
             
             // Navigate to parent path, tracking wallet node
@@ -291,6 +295,8 @@ public class WriteApplicationService {
                 log.debug("📎 Intent token stored for lazy binary upload: {}", intentToken);
             }
             
+            AppliedProposalIndex.record(rootBuilder, proposalId, MutationAuditMetadata.Operation.WRITE, path, appliedAt);
+
             // Commit (deterministic on all nodes)
             MutationApplySupport.mergeReplicated(
                 nodeStore, rootBuilder, "aeron-replication", auditMetadata, "Failed to commit write");
@@ -340,9 +346,10 @@ public class WriteApplicationService {
     }
 
     /**
-     * The proposal is already in Oak, so nothing is mutated. Its durability is still reported after the next flush:
-     * the engine skips a report the log already holds, and once the durability tally no longer tracks the proposal
-     * a re-sent duplicate is the only way it is decided again.
+     * The proposal has already taken effect (it is in the {@link AppliedProposalIndex}, or an older entry left its
+     * node at the same path), so nothing is mutated. Its durability is still reported after the next flush: the
+     * engine skips a report the log already holds, and once the durability tally no longer tracks the proposal a
+     * re-sent duplicate is the only way it is decided again.
      */
     @NotNull
     private String acknowledgeDuplicateReplay(@Nullable String proposalId) {
@@ -351,7 +358,7 @@ public class WriteApplicationService {
         if (headUpdateCallback != null) {
             headUpdateCallback.updateHead(currentHead);
         }
-        log.info("♻️ Duplicate replicated write replay acknowledged without mutating Oak: proposalId={}", proposalId);
+        log.info("♻️ Duplicate write proposal acknowledged without mutating Oak: proposalId={}", proposalId);
         return currentHead;
     }
     

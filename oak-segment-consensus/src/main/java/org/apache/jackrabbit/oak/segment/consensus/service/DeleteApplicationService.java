@@ -24,6 +24,7 @@ import org.apache.jackrabbit.oak.segment.consensus.federation.NamespaceAuthority
 import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisContent;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.spi.state.NodeBuilder;
+import org.apache.jackrabbit.oak.spi.state.NodeState;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -113,13 +114,15 @@ public class DeleteApplicationService {
      * <p><strong>Deterministic:</strong> All nodes execute this identically,
      * producing the same HEAD.
      * 
-     * <p><strong>Idempotent:</strong> Deleting a non-existent path is not an error.
+     * <p><strong>Idempotent:</strong> Deleting a non-existent path is not an error. A delete with a 32-byte
+     * proposal id takes effect once: it is recorded in the {@link AppliedProposalIndex} (even when the path is
+     * already absent) and a resend of it changes nothing.
      * 
      * @param walletAddress Ethereum wallet address (normalized)
      * @param path Full Oak path to delete
      * @param signature Cryptographic signature
      * @param proposalId Proposal ID for durability tracking (ADR 026)
-     * @return The new HEAD after the delete, or null if path didn't exist
+     * @return The new HEAD after the delete, or null if nothing was removed
      * @throws RuntimeException if delete fails
      */
     @Nullable
@@ -143,12 +146,22 @@ public class DeleteApplicationService {
             @Nullable String signature,
             @Nullable MutationAuditMetadata auditMetadata) {
         String proposalId = auditMetadata != null ? auditMetadata.getProposalId() : null;
-        
+        // Replicated deletes carry Aeron's command timestamp; only legacy direct calls fall back to the local clock.
+        Long commandTimestamp = auditMetadata != null ? auditMetadata.getAppliedAt() : null;
+        long appliedAt = commandTimestamp != null ? commandTimestamp : System.currentTimeMillis();
+
         try {
             CanonicalGenesisContent.requireMutable(walletAddress, path);
             log.info("🗑️  APPLYING REPLICATED DELETE: wallet={}, path={}", walletAddress, path);
             NodeStore nodeStore = MutationApplySupport.requireNodeStore(nodeStoreSupplier);
-            NamespaceAuthority.requireWritable(nodeStore.getRoot(), walletAddress, path);
+            NodeState root = nodeStore.getRoot();
+            if (AppliedProposalIndex.find(root, proposalId) != null) {
+                // Already took effect: a resend must not delete what a later proposal created at the path
+                log.info("♻️ Duplicate delete proposal acknowledged without mutating Oak: proposalId={}", proposalId);
+                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
+                return null;
+            }
+            NamespaceAuthority.requireWritable(root, walletAddress, path);
             
             // Get current HEAD for logging
             String previousHead = fileStore.getHead().getRecordId().toString();
@@ -166,7 +179,7 @@ public class DeleteApplicationService {
             }
             
             // Build node structure and navigate to target
-            NodeBuilder rootBuilder = nodeStore.getRoot().builder();
+            NodeBuilder rootBuilder = root.builder();
             NodeBuilder current = rootBuilder;
             
             // Navigate to parent of node to delete
@@ -186,24 +199,24 @@ public class DeleteApplicationService {
                 }
             }
             
-            if (!pathExists) {
-                log.warn("⚠️  Delete skipped - path doesn't exist: {}", path);
-                // Not an error - idempotent delete (already gone)
-                flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
-                return null;
-            }
-            
             // Remove target node
             String targetNodeName = pathParts[pathParts.length - 1];
-            if (current.hasChildNode(targetNodeName)) {
+            boolean removed = pathExists && current.hasChildNode(targetNodeName);
+            if (removed) {
                 current.getChildNode(targetNodeName).remove();
                 log.info("✅ Node removed: {}", targetNodeName);
                 if (walletNode != null) {
                     decrementContentCount(walletNode);
                 }
             } else {
-                log.warn("⚠️  Target node doesn't exist: {} (idempotent delete)", targetNodeName);
-                // Not an error - already deleted
+                // Not an error - idempotent delete (already gone)
+                log.warn("⚠️  Delete target doesn't exist: {} (idempotent delete)", path);
+            }
+
+            // An absent target still consumes the proposal, so a resend cannot delete a node created later
+            boolean recorded = AppliedProposalIndex.record(
+                rootBuilder, proposalId, MutationAuditMetadata.Operation.DELETE, path, appliedAt);
+            if (!removed && !recorded) {
                 flushService.onChangeApplied(MutationApplySupport.durabilityRunnable(durabilityCallback, fileStore, proposalId));
                 return null;
             }
@@ -220,6 +233,9 @@ public class DeleteApplicationService {
             // Update HEAD cache
             if (headUpdateCallback != null) {
                 headUpdateCallback.updateHead(newHead);
+            }
+            if (!removed) {
+                return null;
             }
             
             // Emit SSE delete event
