@@ -472,13 +472,23 @@ repository state converged on every validator. The
 [promotion record](../docs/PRODUCT-PROMOTION.md#validation-record) lists the
 evidence and its limits.
 
-**Not yet validated:** crash and restart recovery, quorum loss and partitions,
-chain-backed payments and signed-intent binding, cloud storage backends, independent
-IPFS replication, dynamic membership, cross-cluster deployments, and garbage
-collection. Cluster-wide proposal idempotency (one effect per `proposalId`) is
-implemented and unit-tested but not yet validated on a live cluster. Status records
-for proposals still in flight live only on the validator that accepted them;
-applied proposals are answered from replicated state.
+The consensus charter's `rebaseline` suite (oak-chain-infra, 13 campaigns, 125
+required assertions) passed on one host in mock mode against three validators, with the
+strict typed state digest of `/` compared across validators after every fault:
+single-follower SIGTERM and SIGKILL with writes committed by the remaining majority;
+leader SIGTERM, and leader SIGKILL with six writes in flight (each resolved on every
+survivor or none, status answered by the new leader, same-ID retries refused);
+quorum loss below a majority (no commit) and recovery; full graceful and SIGKILL
+restarts that kept every write and delete and left the digest unchanged; and one effect
+per `proposalId` for resends after and during commit. A member SIGKILLed and restarted at
+once waits for its Aeron files to go stale and starts on the first attempt.
+
+**Not yet validated:** network partitions, compound or repeated faults, crash windows
+inside a single proposal's lifecycle, snapshot bootstrap of an empty member, overload
+and long soaks, chain-backed payments and signed-intent binding, cloud storage
+backends, independent IPFS replication, dynamic membership, cross-cluster deployments,
+and garbage collection. Status records for proposals still in flight live only on the
+validator that accepted them; applied proposals are answered from replicated state.
 
 Each kind of evidence stands on its own: unit tests, bounded multi-validator
 convergence, fault and recovery runs, and chain-backed or production evidence. A
