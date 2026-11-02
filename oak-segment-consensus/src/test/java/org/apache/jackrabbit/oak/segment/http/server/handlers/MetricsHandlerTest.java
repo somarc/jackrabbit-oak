@@ -23,6 +23,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.leader.ValidatorRole;
 import org.apache.jackrabbit.oak.segment.consensus.metrics.ConsensusMetrics;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.junit.Test;
 import io.prometheus.client.exporter.common.TextFormat;
 
@@ -43,11 +44,7 @@ import static org.mockito.Mockito.*;
 public class MetricsHandlerTest {
 
     @Test
-    public void testHandleMetricsWithEngine() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        when(response.getWriter()).thenReturn(new PrintWriter(body));
-
+    public void testBuildMetricsPayloadWithEngine() throws Exception {
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         when(engine.getCurrentRole()).thenReturn(ValidatorRole.LEADER);
         when(engine.isLeader()).thenReturn(true);
@@ -68,19 +65,14 @@ public class MetricsHandlerTest {
         lagStatus.put("healthy", true);
         when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
 
-        MetricsHandler handler = new MetricsHandler(
+        String json = JsonOutputUtil.toJson(MetricsHandler.buildMetricsPayload(
             engine,
-            Paths.get("/tmp/store"),
+            new ServerContext(null, null, Paths.get("/tmp/store"), "http://localhost:8090"),
             Collections.singletonMap("c1", new Object()),
             Collections.singletonMap("v1", new Object()),
-            new ServerContext(null, null, Paths.get("/tmp/store"), "http://localhost:8090")
-        );
+            Paths.get("/tmp/store")
+        ));
 
-        handler.handleMetrics(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"role\":\"LEADER\""));
         assertTrue(json.contains("\"reachableValidators\":2"));
         assertTrue(json.contains("\"replicationLag\":0"));
@@ -89,33 +81,21 @@ public class MetricsHandlerTest {
     }
 
     @Test
-    public void testHandleMetricsWithoutEngine() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        when(response.getWriter()).thenReturn(new PrintWriter(body));
-
-        MetricsHandler handler = new MetricsHandler(
+    public void testBuildMetricsPayloadWithoutEngine() throws Exception {
+        String json = JsonOutputUtil.toJson(MetricsHandler.buildMetricsPayload(
             null,
-            Paths.get("/tmp/store"),
+            new ServerContext(null, null, Paths.get("/tmp/store"), "http://localhost:8090"),
             Collections.emptyMap(),
             Collections.emptyMap(),
-            new ServerContext(null, null, Paths.get("/tmp/store"), "http://localhost:8090")
-        );
+            Paths.get("/tmp/store")
+        ));
 
-        handler.handleMetrics(response);
-
-        String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"consensus\":null"));
         assertTrue(json.contains("\"replication\":null"));
     }
 
     @Test
-    public void testHandleMetricsIncludesUnhealthyReasonReplicationReasonAndIpfsPolicy() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = mock(HttpServletResponse.class);
-        when(response.getWriter()).thenReturn(new PrintWriter(body));
-
+    public void testBuildMetricsPayloadIncludesUnhealthyReasonReplicationReasonAndIpfsPolicy() throws Exception {
         AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
         when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
         when(engine.isLeader()).thenReturn(false);
@@ -145,18 +125,9 @@ public class MetricsHandlerTest {
         context.apiIpfsPolicyRejectCidServiceUnavailable.set(7);
         context.apiIpfsPolicyAcceptedEnterpriseCid.set(11);
 
-        MetricsHandler handler = new MetricsHandler(
-            engine,
-            null,
-            Collections.emptyMap(),
-            Collections.emptyMap(),
-            context
-        );
+        String json = JsonOutputUtil.toJson(MetricsHandler.buildMetricsPayload(
+            engine, context, Collections.emptyMap(), Collections.emptyMap(), null));
 
-        handler.handleMetrics(response);
-
-        String json = body.toString();
-        assertTrue(json.contains("\"contractVersion\":\"metrics.json.v1\""));
         assertTrue(json.contains("\"unhealthyReason\":\"leader_unreachable\""));
         assertTrue(json.contains("\"reason\":\"lagging\""));
         assertTrue(json.contains("\"storePath\":\"\""));

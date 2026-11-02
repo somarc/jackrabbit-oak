@@ -64,26 +64,7 @@ public class MetricsHandler {
     }
     
     /**
-     * Handle GET /api/metrics - Return consensus and replication metrics (JSON format).
-     */
-    public void handleMetrics(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_OK);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("contractVersion", "metrics.json.v1");
-        payload.put("success", true);
-        payload.put("status", "UP");
-        payload.put("timestamp", System.currentTimeMillis());
-        payload.putAll(buildMetricsPayload(currentAeronConsensusEngine(), context,
-            registeredClients, registeredValidators, storeDirectory));
-
-        response.getWriter().write(JsonOutputUtil.toJson(payload));
-    }
-
-    /**
-     * Builds the consensus/replication/validator/ipfsPolicy metrics shared by
-     * {@code /api/metrics} and the health snapshot.
+     * Builds the consensus/replication/validator/ipfsPolicy metrics of the runtime snapshot.
      */
     static Map<String, Object> buildMetricsPayload(AeronConsensusEngine engine, ServerContext context,
                                                    Map<String, ?> registeredClients,

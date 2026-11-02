@@ -25,6 +25,7 @@ import org.apache.jackrabbit.oak.segment.consensus.aeron.CrashHandler;
 import org.apache.jackrabbit.oak.segment.consensus.aeron.LeadershipChange;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
+import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
 import org.junit.Test;
 
@@ -46,6 +47,7 @@ import java.util.Map;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -168,17 +170,11 @@ public class AeronApiHandlerTest {
     }
 
     @Test
-    public void testHandleValidatorIdentitiesReturnsSelfIdentity() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
+    public void testValidatorIdentitiesDataReturnsSelfIdentity() throws Exception {
         ServerContext context = newContext();
         context.aeronConsensusEngine = baseEngine();
 
-        AeronApiHandler handler = new AeronApiHandler(context);
-        handler.handleValidatorIdentities(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_OK);
-        String json = body.toString();
+        String json = JsonOutputUtil.toJson(new AeronApiHandler(context).getValidatorIdentitiesData());
         assertTrue(json.contains("\"totalValidators\":1"));
         assertTrue(json.contains("\"knownWallets\":1"));
         assertTrue(json.contains("\"walletAddress\":\"0x2222222222222222222222222222222222222222\""));
@@ -186,15 +182,8 @@ public class AeronApiHandlerTest {
     }
 
     @Test
-    public void testHandleValidatorIdentitiesReturnsServiceUnavailableWithoutEngine() throws Exception {
-        StringWriter body = new StringWriter();
-        HttpServletResponse response = responseWithBody(body);
-
-        AeronApiHandler handler = new AeronApiHandler(newContext());
-        handler.handleValidatorIdentities(response);
-
-        verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-        assertTrue(body.toString().contains("\"error\":\"Aeron Cluster consensus not configured\""));
+    public void testValidatorIdentitiesDataIsNullWithoutEngine() throws Exception {
+        assertNull(new AeronApiHandler(newContext()).getValidatorIdentitiesData());
     }
 
     @Test

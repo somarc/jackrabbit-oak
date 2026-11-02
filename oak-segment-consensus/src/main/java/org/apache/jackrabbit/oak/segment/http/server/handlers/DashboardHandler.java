@@ -144,7 +144,6 @@ public class DashboardHandler {
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/local", "Local-only liveness", "Health", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/deep", "Deep dependency health", "Health", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/health/cluster", "Cluster-only health", "Health", "/v1/ops/snapshots/health");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/metrics", "Consensus and replication metrics", "Health", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/metrics", "Prometheus metrics", "Health", null);
 
         addSourceIndexEntry(endpoints, "GET", "/v1/consensus/leader", "Canonical leader resolution", "Consensus", "consensus.leader.v1", "/ops/v1/cluster");
@@ -160,7 +159,6 @@ public class DashboardHandler {
         addInternalIndexEntry(endpoints, "GET", "/v1/head", "Head status", "Consensus", null);
 
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/summary", "Explorer summary contract", "CRX/OC", "explorer.v1", "/ops/v1/explorer/summary");
-        addSourceIndexEntry(endpoints, "GET", "/v1/explorer/release-flow", "Explorer adaptive release flow", "CRX/OC", "explorer.v1", "/ops/v1/explorer/release-flow");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/proposals/{proposalId}", "Explorer proposal detail (short-term: proposals this validator queued, until retention eviction)", "CRX/OC", "explorer.v1", "/ops/v1/explorer/proposals/{proposalId}");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/wallets/{walletAddress}", "Explorer wallet detail", "CRX/OC", "explorer.v1", "/ops/v1/explorer/wallets/{walletAddress}");
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/nav", "CRX/OC cluster-aware content navigation", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/nav");
@@ -169,8 +167,6 @@ public class DashboardHandler {
         addSourceIndexEntry(endpoints, "GET", "/v1/explorer/content/clusters/{clusterId}/provenance", "CRX/OC cluster-scoped provenance and authority facts", "CRX/OC", "explorer.content.v1", "/ops/v1/explorer/content/clusters/{clusterId}/provenance");
         addLocalUiIndexEntry(endpoints, "GET", "/explorer", "Validator-local CRX/OC read-only content explorer", "CRX/OC");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/explore?path=/", "Legacy CRX/OC local node tree browse API", "CRX/OC", "/ops/v1/explorer/content/*");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/recent", "Recent segments", "Storage", "/v1/ops/snapshots/storage");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/segments/tars", "TAR file listing", "Storage", "/v1/ops/snapshots/storage");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/gc/status", "Segment and binary GC state", "Storage", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/blob/{blobId}", "Blob stream by blob id", "Storage", null);
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/api/cid/{oakBlobId}", "CID mapping by Oak blob id", "Storage", null);
@@ -184,7 +180,6 @@ public class DashboardHandler {
         addSourceIndexEntry(endpoints, "GET", "/v1/blockchain/config", "Blockchain mode config", "Configuration", "blockchain.config.v1", "/ops/v1/blockchain/config");
 
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/cluster-state", "Aeron cluster state", "Aeron", "/v1/ops/snapshots/cluster");
-        addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/validator-identities", "Validator identity map", "Aeron", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/raft-metrics", "Raft metrics", "Aeron", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/node-status?nodeId=0", "Per-node status", "Aeron", "/v1/ops/snapshots/runtime");
         addLocalDiagnosticIndexEntry(endpoints, "GET", "/v1/aeron/leadership-history?limit=10", "Leadership history", "Aeron", "/ops/v1/events/recent");

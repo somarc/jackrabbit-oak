@@ -538,27 +538,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testExplorerReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            Map<String, Object> flow = new HashMap<>();
-            flow.put("releaseMode", "adaptive-active");
-            when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/explorer/release-flow");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\"}"));
-        });
-    }
-
-    @Test
     public void testProposalReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -776,59 +755,6 @@ public class RequestRouterTest {
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"path\":\"/content/doc\""));
                 assertTrue(body.toString().contains("\"children\":[\"child-a\"]"));
-            } finally {
-                deleteRecursively(storeDirectory);
-            }
-        });
-    }
-
-    @Test
-    public void testRecentSegmentsRouteReturnsJournalEntries() throws Exception {
-        withRoutingProperties(true, () -> {
-            Path storeDirectory = Files.createTempDirectory("router-recent-segments");
-            try {
-                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
-                    "seg-001 2026-03-20T00:00:00Z",
-                    "seg-002 2026-03-20T00:01:00Z"
-                ));
-                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
-                RequestRouter router = new RequestRouter(context);
-                HttpServletRequest request = request("GET", "/api/segments/recent");
-                HttpServletResponse response = responseWithBody();
-
-                router.route(request, response);
-
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"id\":\"seg-002\""));
-                assertTrue(body.toString().contains("\"id\":\"seg-001\""));
-            } finally {
-                deleteRecursively(storeDirectory);
-            }
-        });
-    }
-
-    @Test
-    public void testTarFilesRouteReturnsTarMetadata() throws Exception {
-        withRoutingProperties(true, () -> {
-            Path storeDirectory = Files.createTempDirectory("router-tars");
-            try {
-                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
-                    "seg-001 now",
-                    "seg-002 later"
-                ));
-                Files.write(storeDirectory.resolve("data00000a.tar"), new byte[16]);
-                Files.write(storeDirectory.resolve("data00001a.tar"), new byte[32]);
-
-                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
-                RequestRouter router = new RequestRouter(context);
-                HttpServletRequest request = request("GET", "/api/segments/tars");
-                HttpServletResponse response = responseWithBody();
-
-                router.route(request, response);
-
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"name\":\"data00000a.tar\""));
-                assertTrue(body.toString().contains("\"name\":\"data00001a.tar\""));
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -1209,24 +1135,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.selfUrl = "http://validator-2:8090";
-            context.aeronConsensusEngine = baseEngine();
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/aeron/validator-identities");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"totalValidators\":1"));
-            assertTrue(body.toString().contains("\"knownWallets\":1"));
-        });
-    }
-
-    @Test
     public void testAeronReplicationLagRouteReturnsLagPayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -1566,42 +1474,6 @@ public class RequestRouterTest {
             assertFalse(body.toString().contains("\"committedHead\": \"latest-aeron-head\""));
             assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
             assertFalse(body.toString().contains("\"committedEpoch\""));
-        });
-    }
-
-    @Test
-    public void testApiMetricsRouteReturnsJsonMetricsPayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-            when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
-            when(engine.isLeader()).thenReturn(false);
-            when(engine.getCurrentEpoch()).thenReturn(11);
-            when(engine.getCurrentTerm()).thenReturn(2);
-            when(engine.getReachableValidatorCount()).thenReturn(2);
-            when(engine.getTotalMemberCount()).thenReturn(3);
-            when(engine.getQuorumSize()).thenReturn(2);
-            when(engine.getHeartbeatAgeMs()).thenReturn(15L);
-            when(engine.isClusterHealthy()).thenReturn(true);
-            Map<String, Object> lagStatus = new HashMap<>();
-            lagStatus.put("role", "FOLLOWER");
-            lagStatus.put("myLogPosition", 10L);
-            lagStatus.put("leaderLogPosition", 12L);
-            lagStatus.put("replicationLag", 2L);
-            lagStatus.put("lagThreshold", 5L);
-            lagStatus.put("healthy", true);
-            when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
-            context.aeronConsensusEngine = engine;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/api/metrics");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"status\":\"UP\""));
-            assertTrue(body.toString().contains("\"replicationLag\":2"));
         });
     }
 

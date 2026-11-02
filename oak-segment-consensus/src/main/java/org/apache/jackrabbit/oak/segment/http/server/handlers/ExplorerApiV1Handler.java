@@ -50,7 +50,6 @@ import java.util.Set;
  *   <li>GET /v1/explorer/summary</li>
  *   <li>GET /v1/explorer/proposals/{proposalId}</li>
  *   <li>GET /v1/explorer/wallets/{walletAddress}</li>
- *   <li>GET /v1/explorer/release-flow</li>
  *   <li>GET /v1/explorer/content/nav</li>
  *   <li>GET /v1/explorer/content/clusters/{clusterId}/tree?path=/oak-chain</li>
  *   <li>GET /v1/explorer/content/clusters/{clusterId}/node?path=/oak-chain</li>
@@ -370,23 +369,6 @@ public class ExplorerApiV1Handler {
             log.error("Failed explorer content " + endpoint + " for cluster {}", clusterId, e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
                 "Failed explorer content " + endpoint + ": " + e.getMessage());
-        }
-    }
-
-    public void handleReleaseFlow(HttpServletResponse response) throws IOException {
-        response.setContentType("application/json");
-        if (context.proposalQueueManager == null) {
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Proposal queue not available");
-            return;
-        }
-        try {
-            Map<String, Object> flow = context.proposalQueueManager.getProposalReleaseFlowStats();
-            Map<String, Object> payload = explorerEnvelope();
-            payload.put("releaseFlow", flow);
-            JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
-        } catch (Exception e) {
-            log.error("Failed explorer release flow", e);
-            ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed explorer release flow: " + e.getMessage());
         }
     }
 

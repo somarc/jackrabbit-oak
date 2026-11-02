@@ -37,10 +37,14 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Handler for health check endpoints.
@@ -706,12 +710,52 @@ public class HealthHandler {
         }
 
         try {
-            ExplorerApiHandler.addTarEntries(storeDirectory, tarEntries);
+            addTarEntries(storeDirectory, tarEntries);
         } catch (Exception e) {
             log.warn("Error building tar inventory snapshot: {}", e.getMessage());
         }
 
         return tarEntries;
+    }
+
+    /**
+     * Appends one entry per {@code .tar} file in {@code storeDirectory}, sorted by name, with a segment
+     * count estimated from the journal length in proportion to file size. Entries added before a failure stay.
+     */
+    static void addTarEntries(Path storeDirectory, List<Map<String, Object>> target) throws IOException {
+        int totalSegments = 0;
+        Path journalPath = storeDirectory.resolve("journal.log");
+        if (Files.exists(journalPath)) {
+            totalSegments = Files.readAllLines(journalPath).size();
+        }
+
+        List<Path> tarFiles;
+        long totalSize = 0;
+        try (Stream<Path> paths = Files.list(storeDirectory)) {
+            tarFiles = paths
+                .filter(p -> p.toString().endsWith(".tar"))
+                .sorted(Comparator.comparing(Path::toString))
+                .collect(Collectors.toList());
+            for (Path tarFile : tarFiles) {
+                totalSize += Files.size(tarFile);
+            }
+        }
+
+        for (Path tarFile : tarFiles) {
+            long fileSize = Files.size(tarFile);
+            BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
+            int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", tarFile.getFileName().toString());
+            entry.put("size", fileSize);
+            entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
+            entry.put("segmentCount", estimatedSegments);
+            entry.put("estimatedCount", true);
+            entry.put("created", attrs.creationTime().toString());
+            entry.put("modified", attrs.lastModifiedTime().toString());
+            target.add(entry);
+        }
     }
 
     private long totalTarSizeBytes(List<Map<String, Object>> tarFiles) {

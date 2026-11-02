@@ -124,7 +124,6 @@ public class RequestRouter implements AutoCloseable {
         );
         ExplorerApiHandler explorerApiHandler = ExplorerApiHandler.withSuppliers(
             () -> context.nodeStore,
-            context.storeDirectory,
             () -> context.blobStore
         );
         DashboardHandler dashboardHandler = new DashboardHandler(context);
@@ -201,8 +200,6 @@ public class RequestRouter implements AutoCloseable {
             String nodePath = req.getParameter("path");
             explorerApiHandler.handleExploreNode(res, nodePath != null ? nodePath : "/");
         });
-        get("/api/segments/recent", (req, res, path) -> explorerApiHandler.handleRecentSegments(res));
-        get("/api/segments/tars", (req, res, path) -> explorerApiHandler.handleTarFiles(res));
         prefix("GET", "/api/blob/", (req, res, path) ->
             explorerApiHandler.handleBlobStream(req, res, path.substring("/api/blob/".length())));
         get("/api/cid/stats", (req, res, path) -> cidApiHandler.handleStats(req, res));
@@ -216,12 +213,10 @@ public class RequestRouter implements AutoCloseable {
         get("/v1/events/recent", (req, res, path) -> eventStreamHandler.handleRecentEvents(req, res));
         get("/v1/events/stats", (req, res, path) -> eventStreamHandler.handleStats(req, res));
 
-        get("/api/metrics", (req, res, path) -> metricsHandler.handleMetrics(res));
         get("/metrics", (req, res, path) -> metricsHandler.handlePrometheusMetrics(res));
 
         // Explorer v1
         get("/v1/explorer/summary", (req, res, path) -> explorerApiV1Handler.handleSummary(res));
-        get("/v1/explorer/release-flow", (req, res, path) -> explorerApiV1Handler.handleReleaseFlow(res));
         prefix("GET", "/v1/explorer/proposals/", (req, res, path) ->
             explorerApiV1Handler.handleProposalById(res, path.substring("/v1/explorer/proposals/".length())));
         prefix("GET", "/v1/explorer/wallets/", (req, res, path) ->
@@ -279,7 +274,6 @@ public class RequestRouter implements AutoCloseable {
 
         // Aeron Cluster-specific endpoints (ADR 025: replication lag)
         get("/v1/aeron/cluster-state", (req, res, path) -> aeronApiHandler.handleClusterState(res));
-        get("/v1/aeron/validator-identities", (req, res, path) -> aeronApiHandler.handleValidatorIdentities(res));
         get("/v1/aeron/raft-metrics", (req, res, path) -> aeronApiHandler.handleRaftMetrics(res));
         get("/v1/aeron/node-status", (req, res, path) -> aeronApiHandler.handleNodeStatus(req, res));
         get("/v1/aeron/leadership-history", (req, res, path) -> aeronApiHandler.handleLeadershipHistory(req, res));
