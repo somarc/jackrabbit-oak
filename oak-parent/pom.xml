@@ -264,8 +264,6 @@
           <configuration>
             <consoleOutput>true</consoleOutput>
             <excludes>
-              <!-- Documentation files don't need license headers -->
-              <exclude>**/*.md</exclude>
               <exclude>**/AGENTS.md</exclude>
             </excludes>
           </configuration>
