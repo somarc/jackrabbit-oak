@@ -16,6 +16,8 @@
  */
 package org.apache.jackrabbit.oak.segment.http.server.handlers;
 
+import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
+import org.apache.jackrabbit.oak.segment.consensus.aeron.AeronConsensusEngine;
 import org.apache.jackrabbit.oak.segment.consensus.config.BlockchainConfig;
 import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.PaymentProof;
@@ -25,6 +27,7 @@ import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.spi.state.NodeStore;
@@ -47,6 +50,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class ProposalQueryHandlerTest {
+
+    private static final String WALLET = "0x1234567890abcdef1234567890abcdef12345678";
 
     private ProposalQueueManagerOptimized queueManager;
     private EvmBridge evmBridge;
@@ -483,6 +488,60 @@ public class ProposalQueryHandlerTest {
 
         verify(response).setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         assertTrue(body.toString().contains("\"error\":\"Error: release flow unavailable\""));
+    }
+
+    @Test
+    public void testGetOperationStatusAfterFailoverAnswersFromReplicatedState() throws Exception {
+        String id = "0x85b28694" + "ab".repeat(28);
+        String path = "/oak-chain/12/34/56/" + WALLET + "/acme/content/page-1793586396590-85b28694";
+        ServerContext context = contextWithAppliedWrite(queueManager, path, id);
+        AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
+        when(engine.durabilityDecision(id)).thenReturn(new ReplicatedDurability.Decision(true, "head-7", null));
+        context.aeronConsensusEngine = engine;
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/" + id);
+
+        new ProposalQueryHandler(context).handleGetOperationStatus(request, response);
+
+        verify(response).setStatus(HttpServletResponse.SC_OK);
+        String json = body.toString();
+        assertTrue(json, json.contains("\"operationId\":\"" + id + "\""));
+        assertTrue(json, json.contains("\"state\":\"COMMITTED\""));
+        assertTrue(json, json.contains("\"sourceState\":\"APPLIED\""));
+        assertTrue(json, json.contains("\"answeredFrom\":\"replicated-state\""));
+        assertTrue(json, json.contains("\"path\":\"" + path + "\""));
+        assertTrue(json, json.contains("\"completedAtMs\":" + AppliedProposals.APPLIED_AT));
+        assertTrue(json, json.contains("\"durabilityState\":\"ACKED\""));
+    }
+
+    @Test
+    public void testGetOperationStatusFromReplicatedStateNeedsNoQueueAndPrefersTheQueue() throws Exception {
+        String id = "0x77" + "cd".repeat(31);
+        String path = "/oak-chain/12/34/56/" + WALLET + "/acme/content/page-1-77cdcdcd";
+        when(request.getRequestURI()).thenReturn("/v1/ops/operations/" + id);
+
+        new ProposalQueryHandler(contextWithAppliedWrite(null, path, id)).handleGetOperationStatus(request, response);
+        assertTrue(body.toString(), body.toString().contains("\"durabilityState\":\"UNKNOWN\""));
+        assertTrue(body.toString(), body.toString().contains("\"state\":\"COMMITTED\""));
+
+        when(queueManager.getProposalStatus(id)).thenReturn(new ProposalStatus(id, ProposalState.PROCESSED, "0xabc",
+            1234L, 77L, null, DurabilityState.PENDING, 0L, null, null));
+        StringWriter leaderBody = new StringWriter();
+        HttpServletResponse leaderResponse = mock(HttpServletResponse.class);
+        when(leaderResponse.getWriter()).thenReturn(new PrintWriter(leaderBody));
+        new ProposalQueryHandler(contextWithAppliedWrite(queueManager, path, id))
+            .handleGetOperationStatus(request, leaderResponse);
+        assertTrue(leaderBody.toString(), leaderBody.toString().contains("\"sourceState\":\"PROCESSED\""));
+        assertTrue(leaderBody.toString(), leaderBody.toString().contains("\"state\":\"PROCESSING\""));
+    }
+
+    private static ServerContext contextWithAppliedWrite(ProposalQueueManagerOptimized queueManager, String path,
+                                                         String proposalId) {
+        MemoryNodeStore store = new MemoryNodeStore();
+        AppliedProposals.applyWrite(store, WALLET, path, proposalId);
+        ServerContext context = new ServerContext(mock(FileStore.class), store, Paths.get("/tmp/store"),
+            "http://localhost:8090");
+        context.proposalQueueManager = queueManager;
+        return context;
     }
 
     private static ProposalQueryHandler newHandler(ProposalQueueManagerOptimized queueManager, EvmBridge evmBridge) {

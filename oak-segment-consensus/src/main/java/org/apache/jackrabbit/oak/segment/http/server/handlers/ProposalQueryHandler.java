@@ -20,6 +20,8 @@ import org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge;
 import org.apache.jackrabbit.oak.segment.consensus.evm.SettlementDetails;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
+import org.apache.jackrabbit.oak.segment.consensus.queue.ReplicatedDurability;
+import org.apache.jackrabbit.oak.segment.consensus.service.AppliedProposalIndex;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
 import org.apache.jackrabbit.oak.segment.http.server.util.ApiErrorUtil;
 import org.apache.jackrabbit.oak.segment.http.server.util.JsonOutputUtil;
@@ -77,8 +79,17 @@ public class ProposalQueryHandler {
         response.setContentType("application/json");
 
         try {
-            ProposalStatus status = requireStatus(request, response, 4, null, "Invalid operation ID", "Operation not found");
+            String id = extractPathSegment(request.getRequestURI(), 4, null);
+            ProposalStatus status = id != null && context.proposalQueueManager != null
+                ? context.proposalQueueManager.getProposalStatus(id) : null;
             if (status == null) {
+                // Not in this member's queue (another leader accepted it, or it was forgotten): replicated state
+                AppliedProposalIndex.Entry applied = AppliedProposalIndex.find(context.authoritativeRoot(), id);
+                if (applied != null) {
+                    JsonOutputUtil.write(response, HttpServletResponse.SC_OK, appliedOperation(id, applied));
+                    return;
+                }
+                requireStatus(request, response, 4, null, "Invalid operation ID", "Operation not found");
                 return;
             }
 
@@ -116,6 +127,36 @@ public class ProposalQueryHandler {
             log.error("Error getting operation status", e);
             ApiErrorUtil.sendJsonError(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Error: " + e.getMessage());
         }
+    }
+
+    /**
+     * The ops.v1 answer for a proposal this member's queue does not hold but its committed state records as applied.
+     * Apply follows the log commit, so the operation is {@code COMMITTED}; its durability decision is reported
+     * while the replicated tally still tracks it.
+     */
+    private Map<String, Object> appliedOperation(String id, AppliedProposalIndex.Entry applied) {
+        ReplicatedDurability.Decision decision = context.aeronConsensusEngine != null
+            ? context.aeronConsensusEngine.durabilityDecision(id) : null;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contractVersion", "ops.v1");
+        payload.put("timestampMs", System.currentTimeMillis());
+        payload.put("operationId", id);
+        payload.put("proposalId", id);
+        payload.put("state", "COMMITTED");
+        payload.put("type", "DELETE".equals(applied.kind()) ? "DELETE_PROPOSAL" : "WRITE_PROPOSAL");
+        payload.put("correlationId", id);
+        payload.put("queue", null);
+        payload.put("startedAtMs", null);
+        payload.put("updatedAtMs", applied.appliedAt());
+        payload.put("completedAtMs", applied.appliedAt());
+        payload.put("deadlineMs", null);
+        payload.put("sourceState", "APPLIED");
+        payload.put("answeredFrom", "replicated-state");
+        payload.put("path", applied.path());
+        payload.put("durabilityState", decision == null ? "UNKNOWN" : decision.durable ? "ACKED" : "FAILED");
+        payload.put("durableHead", decision != null ? decision.durableHead : null);
+        payload.put("error", null);
+        return payload;
     }
 
     /**
