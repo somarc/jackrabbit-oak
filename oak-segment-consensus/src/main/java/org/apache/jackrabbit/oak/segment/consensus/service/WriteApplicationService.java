@@ -274,6 +274,9 @@ public class WriteApplicationService {
                     // Lets every validator resolve the binary, whichever IPFS node stored it.
                     ReplicatedBinaryIndex.record(rootBuilder, blobId, ipfsCid);
                 }
+                // Binary GC never releases an entry referenced at or after its mark.
+                ReplicatedBinaryIndex.stamp(rootBuilder, blobId,
+                    auditMetadata != null ? auditMetadata.getAppliedLogPosition() : null, appliedAt);
             } else if (ipfsCid != null && !ipfsCid.isEmpty()) {
                 // Pure IPFS reference without local blob
                 // No gateway URL: it depends on this node's settings, and replicated state must not.
