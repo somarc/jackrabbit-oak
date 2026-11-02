@@ -28,8 +28,6 @@ import org.apache.jackrabbit.oak.segment.consensus.genesis.CanonicalGenesisConte
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.ServerContext;
-import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
-import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -100,27 +98,6 @@ public class GenesisMutationBoundaryTest {
         new RegistrationHandler(context).handleClientRegistration(request, response);
         assertReserved();
         assertTrue(context.registeredClients.isEmpty());
-    }
-
-    @Test
-    public void binaryIntentCannotTargetTheZeroWallet() throws Exception {
-        UploadSessionManager sessions = mock(UploadSessionManager.class);
-        when(request.getParameter("filesize")).thenReturn("1");
-        when(request.getParameter("mimeType")).thenReturn("text/plain");
-        new BinaryUploadHandler(sessions).handleDeclareIntent(request, response);
-        assertReserved();
-        verifyNoInteractions(sessions);
-    }
-
-    @Test
-    public void legacyBinarySessionCannotCompleteForTheZeroWallet() throws Exception {
-        UploadSessionManager sessions = mock(UploadSessionManager.class);
-        when(request.getParameter("intentToken")).thenReturn("test-intent");
-        when(request.getParameter("cid")).thenReturn("test-cid");
-        when(sessions.getSession("test-intent")).thenReturn(mock(UploadSession.class));
-        new BinaryUploadHandler(sessions).handleCompleteUpload(request, response);
-        assertReserved();
-        org.mockito.Mockito.verify(sessions, org.mockito.Mockito.never()).completeUpload("test-intent", "test-cid");
     }
 
     private void assertReserved() {

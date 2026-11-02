@@ -37,10 +37,14 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Handler for health check endpoints.
@@ -171,26 +175,8 @@ public class HealthHandler {
         boolean allHealthy = true;
         Map<String, Object> payload = new HashMap<>();
 
-        Map<String, Object> fileStoreHealth = new HashMap<>();
-        try {
-            if (fileStore != null) {
-                String headId = fileStore.getHead().getRecordId().toString10();
-                fileStoreHealth.put("status", "UP");
-                fileStoreHealth.put("head", headId.substring(0, Math.min(16, headId.length())) + "...");
-                AeronConsensusEngine aeronEngine = (context != null) ? context.aeronConsensusEngine : null;
-                if (aeronEngine != null) {
-                    putHeadState(fileStoreHealth, aeronEngine);
-                }
-            } else {
-                fileStoreHealth.put("status", "DOWN");
-                fileStoreHealth.put("error", "FileStore not initialized");
-                allHealthy = false;
-            }
-        } catch (Exception e) {
-            fileStoreHealth.put("status", "DOWN");
-            fileStoreHealth.put("error", e.getMessage());
-            allHealthy = false;
-        }
+        Map<String, Object> fileStoreHealth = buildFileStorePayload();
+        allHealthy &= "UP".equals(fileStoreHealth.get("status"));
         payload.put("fileStore", fileStoreHealth);
 
         Map<String, Object> cluster = new HashMap<>();
@@ -227,66 +213,20 @@ public class HealthHandler {
         allHealthy &= "UP".equals(nodeStoreHealth.get("status"));
         payload.put("nodeStore", nodeStoreHealth);
 
-        Map<String, Object> diskSpace = new HashMap<>();
-        try {
-            java.nio.file.FileStore fs = Files.getFileStore(storeDirectory);
-            long totalSpace = fs.getTotalSpace();
-            long usableSpace = fs.getUsableSpace();
-            double usagePercent = ((totalSpace - usableSpace) * 100.0) / totalSpace;
-            boolean diskHealthy = usagePercent < 90.0;
-            diskSpace.put("status", diskHealthy ? "UP" : "WARN");
-            diskSpace.put("totalGb", String.format("%.2f", totalSpace / (1024.0 * 1024.0 * 1024.0)));
-            diskSpace.put("usableGb", String.format("%.2f", usableSpace / (1024.0 * 1024.0 * 1024.0)));
-            diskSpace.put("usagePercent", String.format("%.1f", usagePercent));
-            if (!diskHealthy) {
-                allHealthy = false;
-            }
-        } catch (Exception e) {
-            diskSpace.put("status", "DOWN");
-            diskSpace.put("error", e.getMessage());
-            allHealthy = false;
-        }
+        Map<String, Object> diskSpace = buildDiskSpacePayload();
+        allHealthy &= "UP".equals(diskSpace.get("status"));
         payload.put("diskSpace", diskSpace);
 
-        AeronClusterLauncher aeronLauncher = (context != null) ? context.aeronClusterLauncher : null;
-        if (aeronLauncher != null) {
-            Map<String, Object> mediaDriver = new HashMap<>();
+        if (context != null && context.aeronClusterLauncher != null) {
+            Map<String, Object> mediaDriver;
             try {
-                CrashHandler crashHandler = aeronLauncher.getCrashHandler();
-                org.apache.jackrabbit.oak.segment.consensus.aeron.MediaDriverHealthMonitor healthMonitor = aeronLauncher.getHealthMonitor();
-                boolean mediaDriverHealthy = true;
-                if (crashHandler != null) {
-                    mediaDriver.put("crashState", crashHandler.getState());
-                    mediaDriver.put("hasCrashed", crashHandler.hasCrashed());
-                    mediaDriver.put("forceBootstrap", crashHandler.shouldForceBootstrap());
-                    if (crashHandler.hasCrashed()) {
-                        mediaDriverHealthy = false;
-                    }
-                } else {
-                    mediaDriver.put("crashHandler", "not_initialized");
-                }
-                if (healthMonitor != null) {
-                    mediaDriver.put("status", healthMonitor.isHealthy() ? "UP" : "DEGRADED");
-                    mediaDriver.put("healthStatus", healthMonitor.getHealthStatus());
-                    mediaDriver.put("errorCount", healthMonitor.getErrorCount());
-                    mediaDriver.put("timeoutCount", healthMonitor.getTimeoutCount());
-                    mediaDriver.put("backpressureCount", healthMonitor.getBackpressureCount());
-                    mediaDriver.put("freeSpaceMB", healthMonitor.getFreeSpaceMB());
-                    if (!healthMonitor.isHealthy()) {
-                        mediaDriverHealthy = false;
-                    }
-                } else {
-                    mediaDriver.put("status", "UP");
-                    mediaDriver.put("healthMonitor", "not_initialized");
-                }
-                if (!mediaDriverHealthy) {
-                    allHealthy = false;
-                }
+                mediaDriver = buildMediaDriverPayload();
             } catch (Exception e) {
+                mediaDriver = new LinkedHashMap<>();
                 mediaDriver.put("status", "DOWN");
                 mediaDriver.put("error", e.getMessage());
-                allHealthy = false;
             }
+            allHealthy &= "UP".equals(mediaDriver.get("status")) && !Boolean.TRUE.equals(mediaDriver.get("hasCrashed"));
             payload.put("mediaDriver", mediaDriver);
         }
 
@@ -349,6 +289,24 @@ public class HealthHandler {
         JsonOutputUtil.write(response, allHealthy ? HttpServletResponse.SC_OK : HttpServletResponse.SC_SERVICE_UNAVAILABLE, payload);
     }
     
+    /**
+     * Handle GET /v1/head: the latest head (FileStore head when the engine has none) and an explicit
+     * {@code committedHead}, which is JSON null until a committed head exists.
+     */
+    public void handleHead(HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        AeronConsensusEngine engine = context != null ? context.aeronConsensusEngine : null;
+        String latestHead = engine != null ? engine.getLatestHead() : null;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("latestHead", latestHead == null || latestHead.isEmpty()
+            ? fileStore.getHead().getRecordId().toString10() : latestHead);
+        payload.put("committedHead", null);
+        if (engine != null) {
+            putHeadState(payload, engine);
+        }
+        JsonOutputUtil.write(response, HttpServletResponse.SC_OK, payload);
+    }
+
     /**
      * Handle cluster-only health check endpoint.
      * 
@@ -570,6 +528,8 @@ public class HealthHandler {
             payload.put("crashCount", crashHandler.getCrashCount());
             payload.put("hasCrashed", crashHandler.hasCrashed());
             payload.put("forceBootstrap", crashHandler.shouldForceBootstrap());
+        } else {
+            payload.put("crashHandler", "not_initialized");
         }
 
         if (healthMonitor != null) {
@@ -577,8 +537,6 @@ public class HealthHandler {
             payload.put("healthStatus", healthMonitor.getHealthStatus());
             payload.put("errorCount", healthMonitor.getErrorCount());
             payload.put("timeoutCount", healthMonitor.getTimeoutCount());
-            payload.put("backpressureCount", healthMonitor.getBackpressureCount());
-            payload.put("freeSpaceMB", healthMonitor.getFreeSpaceMB());
         } else {
             payload.put("status", "UP");
             payload.put("healthMonitor", "not_initialized");
@@ -706,12 +664,52 @@ public class HealthHandler {
         }
 
         try {
-            ExplorerApiHandler.addTarEntries(storeDirectory, tarEntries);
+            addTarEntries(storeDirectory, tarEntries);
         } catch (Exception e) {
             log.warn("Error building tar inventory snapshot: {}", e.getMessage());
         }
 
         return tarEntries;
+    }
+
+    /**
+     * Appends one entry per {@code .tar} file in {@code storeDirectory}, sorted by name, with a segment
+     * count estimated from the journal length in proportion to file size. Entries added before a failure stay.
+     */
+    static void addTarEntries(Path storeDirectory, List<Map<String, Object>> target) throws IOException {
+        int totalSegments = 0;
+        Path journalPath = storeDirectory.resolve("journal.log");
+        if (Files.exists(journalPath)) {
+            totalSegments = Files.readAllLines(journalPath).size();
+        }
+
+        List<Path> tarFiles;
+        long totalSize = 0;
+        try (Stream<Path> paths = Files.list(storeDirectory)) {
+            tarFiles = paths
+                .filter(p -> p.toString().endsWith(".tar"))
+                .sorted(Comparator.comparing(Path::toString))
+                .collect(Collectors.toList());
+            for (Path tarFile : tarFiles) {
+                totalSize += Files.size(tarFile);
+            }
+        }
+
+        for (Path tarFile : tarFiles) {
+            long fileSize = Files.size(tarFile);
+            BasicFileAttributes attrs = Files.readAttributes(tarFile, BasicFileAttributes.class);
+            int estimatedSegments = totalSize > 0 ? (int) ((fileSize * totalSegments) / totalSize) : 0;
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", tarFile.getFileName().toString());
+            entry.put("size", fileSize);
+            entry.put("sizeFormatted", FormatUtils.formatBytes(fileSize));
+            entry.put("segmentCount", estimatedSegments);
+            entry.put("estimatedCount", true);
+            entry.put("created", attrs.creationTime().toString());
+            entry.put("modified", attrs.lastModifiedTime().toString());
+            target.add(entry);
+        }
     }
 
     private long totalTarSizeBytes(List<Map<String, Object>> tarFiles) {

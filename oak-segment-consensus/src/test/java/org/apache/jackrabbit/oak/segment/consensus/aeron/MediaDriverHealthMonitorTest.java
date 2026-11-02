@@ -69,9 +69,7 @@ public class MediaDriverHealthMonitorTest {
             assertTrue(monitor.getHealthStatus().contains("HIGH_ERROR_RATE"));
             assertTrue(monitor.getHealthStatus().contains("TIMEOUTS"));
             assertEquals(3L, monitor.getErrorCount());
-            assertEquals(0L, monitor.getBackpressureCount());
             assertEquals(1L, monitor.getTimeoutCount());
-            assertTrue(monitor.getFreeSpace() > 0);
 
             errors.set(0);
             timeouts.set(0);

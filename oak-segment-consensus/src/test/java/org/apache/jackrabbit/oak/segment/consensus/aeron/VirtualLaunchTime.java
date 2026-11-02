@@ -19,7 +19,7 @@ package org.apache.jackrabbit.oak.segment.consensus.aeron;
 import java.util.function.LongSupplier;
 
 /** A launcher clock whose pauses advance it instantly, so a launch can wait out a liveness timeout in a test. */
-final class VirtualLaunchTime implements LongSupplier, AeronClusterLauncher.Pause {
+final class VirtualLaunchTime implements LongSupplier, AeronClusterAddressResolver.Sleeper {
 
     private long now = 1_000_000L;
     private long paused;
@@ -31,7 +31,7 @@ final class VirtualLaunchTime implements LongSupplier, AeronClusterLauncher.Paus
     }
 
     @Override
-    public void pause(long millis) {
+    public void sleep(long millis) {
         now += millis;
         paused += millis;
         pauses++;

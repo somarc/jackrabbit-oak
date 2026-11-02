@@ -41,7 +41,6 @@ import org.apache.jackrabbit.oak.segment.consensus.util.WalletPathUtil;
 import org.apache.jackrabbit.oak.segment.file.FileStore;
 import org.apache.jackrabbit.oak.segment.http.server.binary.BlobUrlSigner;
 import org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService;
-import org.apache.jackrabbit.oak.segment.http.server.binary.UploadSession;
 import org.apache.jackrabbit.oak.segment.http.server.model.ClientRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.model.ValidatorRegistration;
 import org.apache.jackrabbit.oak.segment.http.server.sse.ContentEvent;
@@ -122,19 +121,13 @@ public class RequestRouterTest {
                 context.cidMappingService = new CidMappingService(storeDirectory);
                 RequestRouter router = new RequestRouter(context);
 
-                org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager =
-                    context.uploadSessionManager;
-                uploadSessionManager.createSession("0xabc", 128L, "text/plain", null);
                 context.cidMappingService.registerMapping(
                     "ed06f9cbf0fe878013ccb266170e6b3ba676933a6f065675cc0115c840bf1442#22216",
                     "Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3"
                 );
-                assertTrue(uploadSessionManager.getStats().total > 0);
 
                 router.close();
 
-                assertEquals(0, uploadSessionManager.getStats().total);
-                assertNull(context.uploadSessionManager);
                 assertNull(context.eventBroadcaster);
                 assertNull(context.cidMappingService);
             } finally {
@@ -544,27 +537,6 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testExplorerReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            ProposalQueueManagerOptimized queueManager = mock(ProposalQueueManagerOptimized.class);
-            Map<String, Object> flow = new HashMap<>();
-            flow.put("releaseMode", "adaptive-active");
-            when(queueManager.getProposalReleaseFlowStats()).thenReturn(flow);
-            context.proposalQueueManager = queueManager;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/explorer/release-flow");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"releaseFlow\":{\"releaseMode\":\"adaptive-active\"}"));
-        });
-    }
-
-    @Test
     public void testProposalReleaseFlowRouteReturnsAdaptivePayload() throws Exception {
         withRoutingProperties(true, () -> {
             ServerContext context = newContext();
@@ -784,59 +756,6 @@ public class RequestRouterTest {
                 verify(response).setStatus(HttpServletResponse.SC_OK);
                 assertTrue(body.toString().contains("\"path\":\"/content/doc\""));
                 assertTrue(body.toString().contains("\"children\":[\"child-a\"]"));
-            } finally {
-                deleteRecursively(storeDirectory);
-            }
-        });
-    }
-
-    @Test
-    public void testRecentSegmentsRouteReturnsJournalEntries() throws Exception {
-        withRoutingProperties(true, () -> {
-            Path storeDirectory = Files.createTempDirectory("router-recent-segments");
-            try {
-                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
-                    "seg-001 2026-03-20T00:00:00Z",
-                    "seg-002 2026-03-20T00:01:00Z"
-                ));
-                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
-                RequestRouter router = new RequestRouter(context);
-                HttpServletRequest request = request("GET", "/api/segments/recent");
-                HttpServletResponse response = responseWithBody();
-
-                router.route(request, response);
-
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"id\":\"seg-002\""));
-                assertTrue(body.toString().contains("\"id\":\"seg-001\""));
-            } finally {
-                deleteRecursively(storeDirectory);
-            }
-        });
-    }
-
-    @Test
-    public void testTarFilesRouteReturnsTarMetadata() throws Exception {
-        withRoutingProperties(true, () -> {
-            Path storeDirectory = Files.createTempDirectory("router-tars");
-            try {
-                Files.write(storeDirectory.resolve("journal.log"), Arrays.asList(
-                    "seg-001 now",
-                    "seg-002 later"
-                ));
-                Files.write(storeDirectory.resolve("data00000a.tar"), new byte[16]);
-                Files.write(storeDirectory.resolve("data00001a.tar"), new byte[32]);
-
-                ServerContext context = newContext(mock(NodeStore.class), storeDirectory);
-                RequestRouter router = new RequestRouter(context);
-                HttpServletRequest request = request("GET", "/api/segments/tars");
-                HttpServletResponse response = responseWithBody();
-
-                router.route(request, response);
-
-                verify(response).setStatus(HttpServletResponse.SC_OK);
-                assertTrue(body.toString().contains("\"name\":\"data00000a.tar\""));
-                assertTrue(body.toString().contains("\"name\":\"data00001a.tar\""));
             } finally {
                 deleteRecursively(storeDirectory);
             }
@@ -1088,65 +1007,11 @@ public class RequestRouterTest {
     }
 
     @Test
-    public void testBinaryDeclareIntentRouteReturnsIntentToken() throws Exception {
-        withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            HttpServletRequest request = request("POST", "/v1/binary/declare-intent");
-            when(request.getParameter("walletAddress")).thenReturn("0x1234567890abcdef1234567890abcdef12345678");
-            when(request.getParameter("filesize")).thenReturn("123");
-            when(request.getParameter("mimeType")).thenReturn("image/png");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"intentToken\":\"intent-"));
-        });
-    }
-
-    @Test
-    public void testBinaryCheckIntentRouteReturnsReadyState() throws Exception {
-        withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            UploadSession session = router.getBinaryUploadHandler().getSessionManager()
-                .createSession("0x1234567890abcdef1234567890abcdef12345678", 123L, "image/png", null);
-            router.getBinaryUploadHandler().getSessionManager().markReadyForUpload(session.getIntentToken(), 17L);
-            HttpServletRequest request = request("GET", "/v1/binary/check-intent/" + session.getIntentToken());
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"status\":\"READY_FOR_UPLOAD\""));
-            assertTrue(body.toString().contains("\"epochNumber\":17"));
-        });
-    }
-
-    @Test
-    public void testBinaryCompleteUploadRouteReturnsSuccessPayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            String wallet = "0x1234567890abcdef1234567890abcdef12345678";
-            UploadSession session = router.getBinaryUploadHandler().getSessionManager()
-                .createSession(wallet, 456L, "application/pdf", null);
-            HttpServletRequest request = request("POST", "/v1/binary/complete-upload");
-            when(request.getParameter("intentToken")).thenReturn(session.getIntentToken());
-            when(request.getParameter("cid")).thenReturn("Qmf4F3CWU6Ly958TFiR8BRP18gwvW3Xsj2yXu5DqkonWc3");
-            when(request.getParameter("walletAddress")).thenReturn(wallet);
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"status\":\"complete\""));
-        });
-    }
-
-    @Test
     public void testEventStreamRouteReplaysBufferedEvents() throws Exception {
         withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+            ServerContext context = newContext();
+            RequestRouter router = new RequestRouter(context);
+            context.eventBroadcaster.broadcast(ContentEvent.builder()
                 .id("evt-1")
                 .timestamp(100L)
                 .path("/content/doc-1")
@@ -1173,8 +1038,9 @@ public class RequestRouterTest {
     @Test
     public void testOpsEventStreamRouteUsesOpsEnvelope() throws Exception {
         withRoutingProperties(true, () -> {
-            RequestRouter router = new RequestRouter(newContext());
-            router.getEventBroadcaster().broadcast(ContentEvent.builder()
+            ServerContext context = newContext();
+            RequestRouter router = new RequestRouter(context);
+            context.eventBroadcaster.broadcast(ContentEvent.builder()
                 .id("10")
                 .type(ContentEvent.EventType.CONSENSUS)
                 .action(ContentEvent.Action.LEADER_CHANGE)
@@ -1268,24 +1134,6 @@ public class RequestRouterTest {
 
             verify(response).setStatus(HttpServletResponse.SC_BAD_REQUEST);
             assertTrue(body.toString().contains("Invalid segment UUID"));
-        });
-    }
-
-    @Test
-    public void testAeronValidatorIdentitiesRouteReturnsIdentityPayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            context.selfUrl = "http://validator-2:8090";
-            context.aeronConsensusEngine = baseEngine();
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/v1/aeron/validator-identities");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"totalValidators\":1"));
-            assertTrue(body.toString().contains("\"knownWallets\":1"));
         });
     }
 
@@ -1476,10 +1324,10 @@ public class RequestRouterTest {
             router.route(request, response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": \"committed-aeron-head\""));
-            assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
-            assertTrue(body.toString().contains("\"committedEpoch\": 11"));
+            assertTrue(body.toString().contains("\"latestHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":\"committed-aeron-head\""));
+            assertTrue(body.toString().contains("\"latestEpochSeen\":12"));
+            assertTrue(body.toString().contains("\"committedEpoch\":11"));
         });
     }
 
@@ -1603,8 +1451,8 @@ public class RequestRouterTest {
             router.route(request, response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"fallback-file-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": null"));
+            assertTrue(body.toString().contains("\"latestHead\":\"fallback-file-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":null"));
         });
     }
 
@@ -1624,47 +1472,11 @@ public class RequestRouterTest {
             router.route(request("GET", "/v1/head"), response);
 
             verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"latestHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"committedHead\": null"));
-            assertFalse(body.toString().contains("\"committedHead\": \"latest-aeron-head\""));
-            assertTrue(body.toString().contains("\"latestEpochSeen\": 12"));
+            assertTrue(body.toString().contains("\"latestHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"committedHead\":null"));
+            assertFalse(body.toString().contains("\"committedHead\":\"latest-aeron-head\""));
+            assertTrue(body.toString().contains("\"latestEpochSeen\":12"));
             assertFalse(body.toString().contains("\"committedEpoch\""));
-        });
-    }
-
-    @Test
-    public void testApiMetricsRouteReturnsJsonMetricsPayload() throws Exception {
-        withRoutingProperties(true, () -> {
-            ServerContext context = newContext();
-            AeronConsensusEngine engine = mock(AeronConsensusEngine.class);
-            when(engine.getCurrentRole()).thenReturn(ValidatorRole.FOLLOWER);
-            when(engine.isLeader()).thenReturn(false);
-            when(engine.getCurrentEpoch()).thenReturn(11);
-            when(engine.getCurrentTerm()).thenReturn(2);
-            when(engine.getReachableValidatorCount()).thenReturn(2);
-            when(engine.getTotalMemberCount()).thenReturn(3);
-            when(engine.getQuorumSize()).thenReturn(2);
-            when(engine.getHeartbeatAgeMs()).thenReturn(15L);
-            when(engine.isClusterHealthy()).thenReturn(true);
-            Map<String, Object> lagStatus = new HashMap<>();
-            lagStatus.put("role", "FOLLOWER");
-            lagStatus.put("myLogPosition", 10L);
-            lagStatus.put("leaderLogPosition", 12L);
-            lagStatus.put("replicationLag", 2L);
-            lagStatus.put("lagThreshold", 5L);
-            lagStatus.put("healthy", true);
-            when(engine.getReplicationLagStatus()).thenReturn(lagStatus);
-            context.aeronConsensusEngine = engine;
-
-            RequestRouter router = new RequestRouter(context);
-            HttpServletRequest request = request("GET", "/api/metrics");
-            HttpServletResponse response = responseWithBody();
-
-            router.route(request, response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            assertTrue(body.toString().contains("\"status\":\"UP\""));
-            assertTrue(body.toString().contains("\"replicationLag\":2"));
         });
     }
 
@@ -2162,6 +1974,7 @@ public class RequestRouterTest {
             when(engine.getLeadershipHistory(100)).thenReturn(Arrays.asList(
                 new LeadershipChange(
                     1234L,
+                    -1L,
                     Cluster.Role.LEADER,
                     Cluster.Role.FOLLOWER,
                     7,

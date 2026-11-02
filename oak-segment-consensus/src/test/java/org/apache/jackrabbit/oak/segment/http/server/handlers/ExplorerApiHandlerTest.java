@@ -40,11 +40,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -72,7 +68,7 @@ public class ExplorerApiHandlerTest {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
-        ExplorerApiHandler handler = new ExplorerApiHandler(nodeStore, Paths.get("/tmp/store"), null);
+        ExplorerApiHandler handler = new ExplorerApiHandler(nodeStore, null);
         handler.handleExploreNode(response, "/content/doc");
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -93,7 +89,7 @@ public class ExplorerApiHandlerTest {
         root.child("oak-chain").child("87");
         after.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         AtomicReference<NodeStore> readView = new AtomicReference<>(before);
-        ExplorerApiHandler handler = ExplorerApiHandler.withSuppliers(readView::get, Paths.get("/tmp/store"), () -> null);
+        ExplorerApiHandler handler = ExplorerApiHandler.withSuppliers(readView::get, () -> null);
 
         HttpServletResponse missing = responseWithBody(new StringWriter());
         handler.handleExploreNode(missing, "/oak-chain/87");
@@ -122,7 +118,7 @@ public class ExplorerApiHandlerTest {
         remote.merge(remoteRoot, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         MountInfoProvider mounts = Mounts.newBuilder().mount("remote-b", true, List.of(), List.of(mountRoot)).build();
         NodeStore readView = new CompositeNodeStore.Builder(mounts, local).addMount("remote-b", remote).build();
-        ExplorerApiHandler handler = new ExplorerApiHandler(readView, Paths.get("/tmp/store"), null);
+        ExplorerApiHandler handler = new ExplorerApiHandler(readView, null);
 
         StringWriter body = new StringWriter();
         HttpServletResponse found = responseWithBody(body);
@@ -144,7 +140,7 @@ public class ExplorerApiHandlerTest {
         nodeStore.merge(root, EmptyHook.INSTANCE, CommitInfo.EMPTY);
         StringWriter body = new StringWriter();
 
-        new ExplorerApiHandler(nodeStore, Paths.get("/tmp/store"), null).handleExploreNode(responseWithBody(body), "/");
+        new ExplorerApiHandler(nodeStore, null).handleExploreNode(responseWithBody(body), "/");
 
         assertTrue(body.toString(), body.toString().contains("\"children\":[\"oak-chain\"]"));
     }
@@ -154,7 +150,7 @@ public class ExplorerApiHandlerTest {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
-        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), null);
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), null);
         handler.handleExploreNode(response, "/missing");
 
         verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -162,67 +158,11 @@ public class ExplorerApiHandlerTest {
     }
 
     @Test
-    public void testHandleRecentSegmentsReturnsNewestJournalEntries() throws Exception {
-        Path dir = Files.createTempDirectory("explorer-recent-segments");
-        try {
-            Files.write(dir.resolve("journal.log"), Arrays.asList(
-                "seg-001 2026-03-20T00:00:00Z",
-                "seg-002 2026-03-20T00:01:00Z",
-                "seg-003 2026-03-20T00:02:00Z"
-            ));
-
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
-            ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), dir, null);
-
-            handler.handleRecentSegments(response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            String json = body.toString();
-            assertTrue(json.contains("\"id\":\"seg-003\""));
-            assertTrue(json.contains("\"id\":\"seg-002\""));
-            assertTrue(json.indexOf("seg-003") < json.indexOf("seg-002"));
-        } finally {
-            deleteRecursively(dir);
-        }
-    }
-
-    @Test
-    public void testHandleTarFilesReturnsTarMetadata() throws Exception {
-        Path dir = Files.createTempDirectory("explorer-tars");
-        try {
-            Files.write(dir.resolve("journal.log"), Arrays.asList(
-                "seg-001 now",
-                "seg-002 later",
-                "seg-003 later"
-            ));
-            Files.write(dir.resolve("data00000a.tar"), new byte[16]);
-            Files.write(dir.resolve("data00001a.tar"), new byte[32]);
-
-            StringWriter body = new StringWriter();
-            HttpServletResponse response = responseWithBody(body);
-            ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), dir, null);
-
-            handler.handleTarFiles(response);
-
-            verify(response).setStatus(HttpServletResponse.SC_OK);
-            String json = body.toString();
-            assertTrue(json.contains("\"name\":\"data00000a.tar\""));
-            assertTrue(json.contains("\"name\":\"data00001a.tar\""));
-            assertTrue(json.contains("\"estimatedCount\":true"));
-            assertTrue(json.contains("\"size\":16"));
-            assertTrue(json.contains("\"size\":32"));
-        } finally {
-            deleteRecursively(dir);
-        }
-    }
-
-    @Test
     public void testHandleBlobStreamRejectsMissingBlobStore() throws Exception {
         StringWriter body = new StringWriter();
         HttpServletResponse response = responseWithBody(body);
 
-        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), null);
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), null);
         handler.handleBlobStream(mock(HttpServletRequest.class), response, "blob-1");
 
         verify(response).setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
@@ -236,7 +176,7 @@ public class ExplorerApiHandlerTest {
         BlobStore blobStore = mock(BlobStore.class);
         when(blobStore.getInputStream("blob-404")).thenReturn(null);
 
-        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), blobStore);
         handler.handleBlobStream(mock(HttpServletRequest.class), response, "blob-404");
 
         verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -252,7 +192,7 @@ public class ExplorerApiHandlerTest {
             .thenThrow(new IOException(new DataStoreException("Record blob-released does not exist")));
         when(blobStore.getInputStream("blob-broken"))
             .thenThrow(new IOException("IPFS read failed: Kubo /oak/ipfs/blob-index/YWJj at 10.0.0.5 refused"));
-        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), blobStore);
 
         StringWriter missingBody = new StringWriter();
         HttpServletResponse missing = responseWithBody(missingBody);
@@ -283,7 +223,7 @@ public class ExplorerApiHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getOutputStream()).thenReturn(output);
 
-        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), Paths.get("/tmp/store"), blobStore);
+        ExplorerApiHandler handler = new ExplorerApiHandler(new MemoryNodeStore(), blobStore);
         handler.handleBlobStream(mock(HttpServletRequest.class), response, "ed06f9cb-demo");
 
         verify(response).setStatus(HttpServletResponse.SC_OK);
@@ -303,9 +243,8 @@ public class ExplorerApiHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getOutputStream()).thenReturn(output);
 
-        ExplorerApiHandler handler = ExplorerApiHandler.withBlobStoreSupplier(
-            new MemoryNodeStore(),
-            Paths.get("/tmp/store"),
+        ExplorerApiHandler handler = ExplorerApiHandler.withSuppliers(
+            MemoryNodeStore::new,
             () -> blobStoreRef[0]
         );
         blobStoreRef[0] = blobStore;
@@ -321,21 +260,6 @@ public class ExplorerApiHandlerTest {
         HttpServletResponse response = mock(HttpServletResponse.class);
         when(response.getWriter()).thenReturn(new PrintWriter(body));
         return response;
-    }
-
-    private static void deleteRecursively(Path dir) throws IOException {
-        if (dir == null || !Files.exists(dir)) {
-            return;
-        }
-        try (java.util.stream.Stream<Path> stream = Files.walk(dir)) {
-            stream.sorted(Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-        }
     }
 
     private static final class RecordingServletOutputStream extends ServletOutputStream {

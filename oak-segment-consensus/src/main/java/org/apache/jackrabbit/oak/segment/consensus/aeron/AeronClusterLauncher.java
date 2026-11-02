@@ -56,7 +56,6 @@ public class AeronClusterLauncher {
     
     private static final Logger log = LoggerFactory.getLogger(AeronClusterLauncher.class);
     
-    public static final int CLIENT_FACING_PORT_OFFSET = AeronClusterTopology.CLIENT_FACING_PORT_OFFSET;
     private static final int DEFAULT_CLUSTER_TERM_LENGTH_BYTES = 128 * 1024 * 1024; // 128MB
     private static final int DEFAULT_PUBLICATION_TERM_BUFFER_LENGTH_BYTES = 64 * 1024 * 1024; // 64MB
     private static final int DEFAULT_DRIVER_TIMEOUT_MS = 60000;
@@ -88,7 +87,7 @@ public class AeronClusterLauncher {
     private final LaunchInvoker launchInvoker;
     private final ContainerLaunchInvoker containerLaunchInvoker;
     private final LongSupplier clockMs;
-    private final Pause pause;
+    private final AeronClusterAddressResolver.Sleeper pause;
     
     private ClusteredMediaDriver clusteredMediaDriver;
     private ClusteredServiceContainer container;
@@ -135,7 +134,7 @@ public class AeronClusterLauncher {
                          LaunchInvoker launchInvoker,
                          ContainerLaunchInvoker containerLaunchInvoker,
                          LongSupplier clockMs,
-                         Pause pause) {
+                         AeronClusterAddressResolver.Sleeper pause) {
         this.nodeId = nodeId;
         this.hostnames = hostnames;
         this.baseDir = baseDir;
@@ -228,7 +227,7 @@ public class AeronClusterLauncher {
             this::performShutdown,
             () -> shutdownCallback
         );
-        new AeronClusterStartupPreflight(nodeId, crashHandler).run(aeronDirName);
+        new AeronClusterStartupPreflight(crashHandler).run(aeronDirName);
         
         // Media Driver Context
         // ✈️ AERON RESILIENCE: Enhanced configuration for stability and performance
@@ -339,23 +338,8 @@ public class AeronClusterLauncher {
         return aeronDirectoryName;
     }
     
-    /**
-     * Get the cluster base port.
-     */
-    public static int getPortBase() {
-        return AeronClusterTopology.getPortBase();
-    }
-
     private String getHostname() {
         return hostnames.get(nodeId);
-    }
-    
-    public static int calculatePort(int nodeId, int offset) {
-        return AeronClusterTopology.calculatePort(nodeId, offset);
-    }
-
-    public static int calculatePort(int clusterBasePort, int nodeId, int offset) {
-        return AeronClusterTopology.calculatePort(clusterBasePort, nodeId, offset);
     }
     
     /**
@@ -464,7 +448,7 @@ public class AeronClusterLauncher {
                 throw refused;
             }
             try {
-                pause.pause(Math.min(STALE_OWNER_POLL_MS, boundMs - waitedMs));
+                pause.sleep(Math.min(STALE_OWNER_POLL_MS, boundMs - waitedMs));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Interrupted while waiting for " + owned + " to go stale", e);
@@ -597,11 +581,6 @@ public class AeronClusterLauncher {
         );
 
         ClusteredMediaDriver launch(AeronClusterContextFactory.LaunchContexts contexts);
-    }
-
-    /** Waits between launch attempts; a seam for tests. */
-    interface Pause {
-        void pause(long millis) throws InterruptedException;
     }
 
     interface ContainerLaunchInvoker {

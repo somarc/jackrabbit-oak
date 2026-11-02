@@ -86,10 +86,33 @@ public class AeronPrometheusMetricsTest {
             assertTrue(streamValue != null && streamValue == 123.0);
             assertEquals(11.0, CollectorRegistry.defaultRegistry.getSampleValue("aeron_errors"), 0.0);
 
-            metrics.updateGaugeValues();
+            metrics.updateMetrics();
             assertEquals(123.0, CollectorRegistry.defaultRegistry.getSampleValue(
                 "aeron_pub_limit", new String[] {"session_id", "stream_id", "channel"},
                 new String[] {"42", "7", "aeron:udp?endpoint=127.0.0.1:9000"}), 0.0);
+        } finally {
+            metrics.close();
+        }
+    }
+
+    @Test
+    public void updateMetricsExportsEveryCounterOfTheSameType() throws Exception {
+        StubCountersReader reader = new StubCountersReader(64);
+        AeronPrometheusMetrics metrics = metrics(reader);
+        try {
+            shutdownBackgroundUpdates(metrics);
+            reader.setStreamCounter(STREAM_COUNTER_ID, PUBLISHER_LIMIT_TYPE_ID, 100L, "publisher limit", 1, 10,
+                "aeron:udp?endpoint=127.0.0.1:9000");
+            reader.setStreamCounter(STREAM_COUNTER_ID + 1, PUBLISHER_LIMIT_TYPE_ID, 200L, "publisher limit", 2, 11,
+                "aeron:ipc");
+            metrics.updateMetrics();
+
+            String[] labels = {"session_id", "stream_id", "channel"};
+            assertEquals(100.0, CollectorRegistry.defaultRegistry.getSampleValue("aeron_pub_limit", labels,
+                new String[] {"1", "10", "aeron:udp?endpoint=127.0.0.1:9000"}), 0.0);
+            assertEquals(200.0, CollectorRegistry.defaultRegistry.getSampleValue("aeron_pub_limit", labels,
+                new String[] {"2", "11", "aeron:ipc"}), 0.0);
+            assertEquals(2, streamGaugeCount(metrics));
         } finally {
             metrics.close();
         }

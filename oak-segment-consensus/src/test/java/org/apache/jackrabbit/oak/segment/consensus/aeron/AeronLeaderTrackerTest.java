@@ -32,8 +32,8 @@ public class AeronLeaderTrackerTest {
     public void leadershipHistoryReturnsNewestFirstAndRespectsLimit() {
         AeronLeaderTracker tracker = new AeronLeaderTracker(null);
 
-        tracker.recordChange(Cluster.Role.FOLLOWER, Cluster.Role.LEADER, 7, 1, "node-1", 1000L, -1L);
-        tracker.recordChange(Cluster.Role.LEADER, Cluster.Role.FOLLOWER, 8, 2, "node-2", 2000L, -1L);
+        tracker.recordChange(new LeadershipChange(1000L, -1L, Cluster.Role.FOLLOWER, Cluster.Role.LEADER, 7, 1, "node-1"));
+        tracker.recordChange(new LeadershipChange(2000L, -1L, Cluster.Role.LEADER, Cluster.Role.FOLLOWER, 8, 2, "node-2"));
 
         List<LeadershipChange> all = tracker.getLeadershipHistory(0);
         assertEquals(2, all.size());
@@ -50,7 +50,7 @@ public class AeronLeaderTrackerTest {
     public void historyIsCappedAt100Entries() {
         AeronLeaderTracker tracker = new AeronLeaderTracker(null);
         for (int i = 0; i < 120; i++) {
-            tracker.recordChange(Cluster.Role.FOLLOWER, Cluster.Role.LEADER, i, i, "node-" + i, i, -1L);
+            tracker.recordChange(new LeadershipChange(i, -1L, Cluster.Role.FOLLOWER, Cluster.Role.LEADER, i, i, "node-" + i));
         }
         List<LeadershipChange> all = tracker.getLeadershipHistory(0);
         assertEquals(100, all.size());

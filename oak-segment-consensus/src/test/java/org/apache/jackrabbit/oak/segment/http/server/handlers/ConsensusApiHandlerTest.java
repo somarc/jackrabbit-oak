@@ -19,6 +19,7 @@ package org.apache.jackrabbit.oak.segment.http.server.handlers;
 import org.apache.jackrabbit.oak.api.Type;
 import org.apache.jackrabbit.oak.plugins.memory.MemoryNodeStore;
 import org.apache.jackrabbit.oak.segment.consensus.queue.DurabilityState;
+import org.apache.jackrabbit.oak.segment.consensus.service.MutationAuditMetadata;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalQueueManagerOptimized;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalState;
 import org.apache.jackrabbit.oak.segment.consensus.queue.ProposalStatus;
@@ -569,7 +570,7 @@ public class ConsensusApiHandlerTest {
                 lateHandler.refreshCallbacks();
                 lateContext.setProposalQueueManager(queueManager);
 
-                lateHandler.applyReplicatedWrite(
+                lateHandler.applyReplicatedWriteWithAuditMetadata(
                     "0x1234567890abcdef1234567890abcdef12345678",
                     "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
                     "page",
@@ -579,7 +580,7 @@ public class ConsensusApiHandlerTest {
                     null,
                     null,
                     null,
-                    "proposal-1"
+                    MutationAuditMetadata.write(null, null, "proposal-1", null, null, null, null)
                 );
 
                 verify(aeronEngine).sendSegmentPersisted("proposal-1", "new-head", true, null);
@@ -616,11 +617,11 @@ public class ConsensusApiHandlerTest {
                 lateHandler.refreshCallbacks();
                 lateContext.setProposalQueueManager(queueManager);
 
-                lateHandler.applyReplicatedDelete(
+                lateHandler.applyReplicatedDeleteWithAuditMetadata(
                     "0x1234567890abcdef1234567890abcdef12345678",
                     "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
                     "0xsig",
-                    "proposal-delete-1"
+                    MutationAuditMetadata.delete(null, null, "proposal-delete-1", null, null, null, null)
                 );
 
                 verify(aeronEngine).sendSegmentPersisted("proposal-delete-1", "delete-head", true, null);
@@ -650,7 +651,7 @@ public class ConsensusApiHandlerTest {
         lateContext.setAuthoritativeNodeStore(authoritativeStore);
         lateContext.blobStore = mock(BlobStore.class);
 
-        lateHandler.applyReplicatedWrite(
+        lateHandler.applyReplicatedWriteWithAuditMetadata(
             "0x1234567890abcdef1234567890abcdef12345678",
             "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
             "file",
@@ -660,7 +661,7 @@ public class ConsensusApiHandlerTest {
             "blob-123#42",
             "image/jpeg",
             "QmBinaryCid",
-            null
+            MutationAuditMetadata.write(null, null, null, null, null, null, null)
         );
 
         assertFalse(nodeExists(readViewStore,
@@ -693,7 +694,7 @@ public class ConsensusApiHandlerTest {
         lateContext.setProposalQueueManager(queueManager);
         ConsensusApiHandler lateHandler = new ConsensusApiHandler(lateContext);
 
-        assertThrows(RuntimeException.class, () -> lateHandler.applyReplicatedWrite(
+        assertThrows(RuntimeException.class, () -> lateHandler.applyReplicatedWriteWithAuditMetadata(
             "0x1234567890abcdef1234567890abcdef12345678",
             "/oak-chain/aa/bb/cc/0x1234567890abcdef1234567890abcdef12345678/Acme/content/doc-1",
             "page",
@@ -703,7 +704,7 @@ public class ConsensusApiHandlerTest {
             null,
             null,
             null,
-            "proposal-failure-1"
+            MutationAuditMetadata.write(null, null, "proposal-failure-1", null, null, null, null)
         ));
 
         verify(queueManager).updateDurability(

@@ -607,9 +607,8 @@ public class MessageDispatcherTest {
     }
 
     @Test
-    public void testLifecycleAndSetterMethodsAreCallable() {
+    public void testSetterMethodsAreCallable() {
         MessageDispatcher dispatcher = new MessageDispatcher();
-        dispatcher.activate();
         dispatcher.setDurabilityCallback(new MessageDispatcher.DurabilityCallback() {
             @Override
             public void onSegmentPersisted(String proposalId, int memberId, String durableHead, boolean success, String error,
@@ -630,7 +629,6 @@ public class MessageDispatcherTest {
             }
         });
         dispatcher.setTermProvider(() -> 3L);
-        dispatcher.deactivate();
     }
 
     @Test

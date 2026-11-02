@@ -24,7 +24,7 @@ import java.net.URI;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-final class ServerNetworkUtil {
+public final class ServerNetworkUtil {
 
     private static final Logger log = LoggerFactory.getLogger(ServerNetworkUtil.class);
 
@@ -76,7 +76,7 @@ final class ServerNetworkUtil {
      * @param url URL with hostname (e.g., "http://localhost:8090" or "http://validator-1:8090")
      * @return URL with IP address (e.g., "http://127.0.0.1:8090" or "http://172.18.0.2:8090")
      */
-    static String resolveUrlToIP(String url) {
+    public static String resolveUrlToIP(String url) {
         try {
             java.net.URL parsedUrl = new java.net.URL(url);
             String hostname = parsedUrl.getHost();

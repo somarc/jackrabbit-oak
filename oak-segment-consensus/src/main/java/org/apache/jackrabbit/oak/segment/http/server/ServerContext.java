@@ -60,7 +60,6 @@ public class ServerContext {
     public volatile String selfUrl;
     public volatile ProposalQueueManagerOptimized proposalQueueManager;
     public volatile org.apache.jackrabbit.oak.segment.consensus.evm.EvmBridge evmBridge;
-    public volatile org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager; // ADR 020 lazy binary upload
     public volatile String blobStoreType = "default"; // file, ipfs, s3, azure
     public volatile org.apache.jackrabbit.oak.spi.blob.BlobStore blobStore; // For eager binary uploads
     public volatile org.apache.jackrabbit.oak.segment.http.server.binary.CidMappingService cidMappingService; // Oak ↔ IPFS CID mapping
@@ -250,11 +249,6 @@ public class ServerContext {
         return updated;
     }
 
-    public void setUploadSessionManager(org.apache.jackrabbit.oak.segment.http.server.binary.UploadSessionManager uploadSessionManager) {
-        this.uploadSessionManager = uploadSessionManager;
-        log.info("✅ Upload Session Manager initialized (ADR 020 lazy binary upload)");
-    }
-    
     public void setEventBroadcaster(EventBroadcaster eventBroadcaster) {
         this.eventBroadcaster = eventBroadcaster;
         log.info("📡 Event Broadcaster initialized (ADR 036 SSE streaming)");

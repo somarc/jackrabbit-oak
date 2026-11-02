@@ -143,7 +143,6 @@ public class AeronClusterService {
         log.info("  reconnectMaxAttempts: {}", config.reconnectMaxAttempts());
         log.info("  maxConcurrentSessions: {}", config.maxConcurrentSessions());
         log.info("  peerProbeMode: {}", config.peerProbeMode());
-        log.info("  deleteAeronDirsOnStartup: {}", config.deleteAeronDirsOnStartup());
     }
 
     private void applyConfigToSystemProperties(String selfUrl, List<String> peerUrls) {
@@ -201,9 +200,6 @@ public class AeronClusterService {
         setIfPositive("oak.cluster.reconnect.maxAttempts", config.reconnectMaxAttempts());
         setIfPositive("oak.cluster.max.concurrent.sessions", config.maxConcurrentSessions());
         setIfNotBlank("oak.health.peerProbeMode", config.peerProbeMode());
-        if (config.deleteAeronDirsOnStartup()) {
-            System.setProperty("aeron.delete.dirs.on.startup", "true");
-        }
     }
 
     private static void setIfNotBlank(String key, String value) {

@@ -40,8 +40,6 @@ final class AeronGenesisInitializer {
 
     private static final Logger log = LoggerFactory.getLogger(AeronGenesisInitializer.class);
 
-    static final String GENESIS_ADDRESS = CanonicalGenesisContent.GENESIS_ADDRESS;
-
     private final FileStore fileStore;
     private final NodeStore nodeStore;
     private final CanonicalGenesisContent canonicalGenesisContent;
@@ -50,10 +48,6 @@ final class AeronGenesisInitializer {
         this.fileStore = fileStore;
         this.nodeStore = nodeStore;
         this.canonicalGenesisContent = new CanonicalGenesisContent(nodeStore, blobStore);
-    }
-
-    void initializeGenesisContent(GenesisProposal proposal) {
-        initializeGenesisContent(proposal, null);
     }
 
     /**

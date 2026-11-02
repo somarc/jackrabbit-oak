@@ -16,7 +16,6 @@
  */
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
-import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -35,34 +34,6 @@ public class AeronClusterStartupPreflightTest {
     @Rule
     public TemporaryFolder tempFolder = new TemporaryFolder();
 
-    @After
-    public void clearProperties() {
-        System.clearProperty("aeron.delete.dirs.on.startup");
-        System.clearProperty("aeron.dir.name");
-    }
-
-    @Test
-    public void runDeletesConfiguredAeronDirectoryWhenStartupCleanupEnabled() throws Exception {
-        File configuredAeronDir = tempFolder.newFolder("configured-aeron-dir");
-        Files.write(
-            new File(configuredAeronDir, "cnc.dat").toPath(),
-            "stale".getBytes(StandardCharsets.UTF_8)
-        );
-
-        System.setProperty("aeron.delete.dirs.on.startup", "true");
-        System.setProperty("aeron.dir.name", configuredAeronDir.getAbsolutePath());
-
-        CrashHandler crashHandler = mock(CrashHandler.class);
-        AeronClusterStartupPreflight.PreflightResult result =
-            new AeronClusterStartupPreflight(1, crashHandler)
-                .run(new File(tempFolder.getRoot(), "driver").getAbsolutePath());
-
-        assertFalse(configuredAeronDir.exists());
-        assertFalse(result.hasCrashMarkers);
-        assertFalse(result.staleDriverDirectoryDetected);
-        assertFalse(result.forceBootstrap);
-    }
-
     @Test
     public void runReportsCrashMarkersAndLeavesTheDriverDirectoryToTheMediaDriver() throws Exception {
         File staleDriverDir = tempFolder.newFolder("stale-driver");
@@ -77,7 +48,7 @@ public class AeronClusterStartupPreflightTest {
         when(crashHandler.shouldForceBootstrap()).thenReturn(true);
 
         AeronClusterStartupPreflight.PreflightResult result =
-            new AeronClusterStartupPreflight(2, crashHandler).run(staleDriverDir.getAbsolutePath());
+            new AeronClusterStartupPreflight(crashHandler).run(staleDriverDir.getAbsolutePath());
 
         assertTrue(result.hasCrashMarkers);
         assertTrue(result.staleDriverDirectoryDetected);
@@ -92,7 +63,7 @@ public class AeronClusterStartupPreflightTest {
         when(crashHandler.shouldForceBootstrap()).thenReturn(false);
 
         AeronClusterStartupPreflight.PreflightResult result =
-            new AeronClusterStartupPreflight(0, crashHandler)
+            new AeronClusterStartupPreflight(crashHandler)
                 .run(new File(tempFolder.getRoot(), "missing-driver").getAbsolutePath());
 
         assertFalse(result.hasCrashMarkers);
@@ -109,7 +80,7 @@ public class AeronClusterStartupPreflightTest {
         when(crashHandler.shouldForceBootstrap()).thenReturn(false);
 
         AeronClusterStartupPreflight.PreflightResult result =
-            new AeronClusterStartupPreflight(0, crashHandler).run(emptyDriverDir.getAbsolutePath());
+            new AeronClusterStartupPreflight(crashHandler).run(emptyDriverDir.getAbsolutePath());
 
         assertTrue(emptyDriverDir.exists());
         assertFalse(result.hasCrashMarkers);

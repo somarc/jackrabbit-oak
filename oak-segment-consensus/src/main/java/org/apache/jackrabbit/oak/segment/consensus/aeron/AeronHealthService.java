@@ -17,12 +17,10 @@
 package org.apache.jackrabbit.oak.segment.consensus.aeron;
 
 import io.aeron.cluster.service.Cluster;
-import org.osgi.service.component.annotations.Component;
 
 /**
  * Centralized health/heartbeat tracking for Aeron consensus.
  */
-@Component(service = AeronHealthService.class)
 public class AeronHealthService {
 
     private volatile long lastHeartbeatTime = System.currentTimeMillis();

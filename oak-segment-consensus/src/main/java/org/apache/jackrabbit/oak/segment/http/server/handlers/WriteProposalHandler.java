@@ -76,15 +76,7 @@ public class WriteProposalHandler {
             return;
         }
 
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        // ADR 028: PRE-FLIGHT HEALTH CHECK
-        // Prevent silent proposal loss by rejecting requests when cluster unhealthy
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        if (!context.aeronConsensusEngine.isClusterHealthy()) {
-            String reason = context.aeronConsensusEngine.getUnhealthyReason();
-            log.warn("❌ Cluster unhealthy, rejecting proposal: {}", reason);
-            reject(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, null,
-                "Cluster unhealthy: " + reason + ". Please retry in a few seconds.");
+        if (ProposalRequestSupport.rejectIfUnhealthy(context, "proposal", response)) {
             return;
         }
 
@@ -483,20 +475,12 @@ public class WriteProposalHandler {
             log.debug("🪣 Using wallet shard: {} (org: {}, contentRoot: {})", shardId,
                 organization != null ? organization : "none", contentRoot);
 
-            // V5 alignment: require the client to supply the on-chain proposalId
-            // (bytes32 from authorizeWrite()) in all modes.
-            if (clientProposalId == null || clientProposalId.trim().isEmpty()) {
-                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
-                    "Missing proposalId parameter. Clients must supply a 0x-prefixed 32-byte hex proposalId from the authorize/payment contract flow.");
+            String proposalIdError = ProposalRequestSupport.proposalIdError(clientProposalId, "authorize/payment contract");
+            if (proposalIdError != null) {
+                reject(response, HttpServletResponse.SC_BAD_REQUEST, null, proposalIdError);
                 return;
             }
-            String proposalId = clientProposalId.trim();
-            if (!ProposalRequestSupport.isValidProposalId(proposalId)) {
-                reject(response, HttpServletResponse.SC_BAD_REQUEST, null,
-                    "Invalid proposalId format. Expected 0x-prefixed 32-byte hex.");
-                return;
-            }
-            proposalId = ProposalRequestSupport.normalizeProposalId(proposalId);
+            String proposalId = ProposalRequestSupport.normalizeProposalId(clientProposalId.trim());
             if (ProposalRequestSupport.rejectDuplicate(context, proposalId, response)) {
                 return;
             }

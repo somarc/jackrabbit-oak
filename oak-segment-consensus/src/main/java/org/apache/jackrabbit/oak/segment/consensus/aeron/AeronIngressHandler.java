@@ -22,9 +22,6 @@ import io.aeron.logbuffer.Header;
 import org.agrona.DirectBuffer;
 import org.apache.jackrabbit.oak.segment.consensus.validation.MutationRejectedException;
 import org.apache.jackrabbit.oak.segment.consensus.service.AppliedLogPosition;
-import org.osgi.service.component.annotations.Activate;
-import org.osgi.service.component.annotations.Component;
-import org.osgi.service.component.annotations.Reference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +32,6 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Handles Aeron ingress messages and delegates to the MessageDispatcher.
  */
-@Component(service = AeronIngressHandler.class)
 public class AeronIngressHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AeronIngressHandler.class);
@@ -43,7 +39,6 @@ public class AeronIngressHandler {
     private final AtomicLong lastDispatchFailLogMs = new AtomicLong(0);
     private final AtomicInteger dispatchFailSuppressed = new AtomicInteger(0);
 
-    private final AeronMessageCodec codec;
     private final MessageDispatcher dispatcher;
     private Runnable heartbeatCallback;
     private GenesisCallback genesisCallback;
@@ -54,10 +49,7 @@ public class AeronIngressHandler {
         void apply(long timestamp, String triggerJson, AppliedLogPosition logPosition);
     }
 
-    @Activate
-    public AeronIngressHandler(@Reference AeronMessageCodec codec,
-                               @Reference MessageDispatcher dispatcher) {
-        this.codec = codec;
+    public AeronIngressHandler(MessageDispatcher dispatcher) {
         this.dispatcher = dispatcher;
     }
 
@@ -83,16 +75,16 @@ public class AeronIngressHandler {
         log.debug("📨 onSessionMessage() called - session: {}, length: {}, role: {}, timestamp: {}",
             session.id(), length, cluster != null ? cluster.role() : "UNKNOWN", timestamp);
 
-        if (length < codec.headerLength()) {
+        if (length < SimpleMessageHeader.ENCODED_LENGTH) {
             log.warn("⚠️  Message too short: {} (minimum {} bytes for SBE header)",
-                length, codec.headerLength());
+                length, SimpleMessageHeader.ENCODED_LENGTH);
             return false;
         }
 
         // End of this entry in the cluster log; identical on every member (BoundedLogAdapter passes header.position()).
         // Apply failures propagate: the engine stops this member rather than skip the entry.
         long logPosition = header != null ? header.position() : -1L;
-        SimpleMessageHeader.HeaderInfo headerInfo = codec.decodeHeader(buffer, offset);
+        SimpleMessageHeader.HeaderInfo headerInfo = SimpleMessageHeader.decode(buffer, offset);
 
         if (headerInfo.templateId == SimpleMessageHeader.TEMPLATE_ID_GENESIS_PROPOSAL) {
             AppliedLogPosition entry = dispatcher.entryPosition(logPosition, 0);
@@ -144,8 +136,8 @@ public class AeronIngressHandler {
     }
 
     private String readGenesisProposal(DirectBuffer buffer, int offset, int length, int blockLength) {
-        int payloadOffset = offset + codec.headerLength();
-        int payloadLength = Math.max(0, Math.min(blockLength, length - codec.headerLength()));
+        int payloadOffset = offset + SimpleMessageHeader.ENCODED_LENGTH;
+        int payloadLength = Math.max(0, Math.min(blockLength, length - SimpleMessageHeader.ENCODED_LENGTH));
         if (payloadLength == 0) {
             return "{}";
         }
